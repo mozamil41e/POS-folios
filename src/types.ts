@@ -150,10 +150,59 @@ export interface LaravelVirtualFile {
   content: string;
 }
 
+export type PurchasePaymentStatus = 'paid' | 'credit' | 'partial';
+
+export interface Supplier {
+  id: number;
+  name_ar: string;
+  name_en: string;
+  vat_number: string;
+  cr_number: string;
+  phone: string;
+  email: string;
+  address_ar: string;
+  created_at: string;
+}
+
+export interface PurchaseItem {
+  id?: number;
+  purchase_id?: number;
+  product_id: number;
+  sku: string;
+  name_ar: string;
+  name_en: string;
+  qty: number;
+  unit_cost: number;
+  tax_rate: number;
+  line_subtotal: number;
+  line_vat: number;
+  line_total: number;
+}
+
+export interface Purchase {
+  id: number;
+  purchase_number: string;
+  supplier_id: number;
+  supplier_name: string;
+  supplier_vat: string;
+  supplier_invoice_no: string;
+  payment_status: PurchasePaymentStatus;
+  paid_amount: number;
+  subtotal: number;
+  vat_total: number;
+  grand_total: number;
+  notes: string;
+  received_at: string;
+  created_at: string;
+  items?: PurchaseItem[];
+}
+
 export interface BootstrapPayload {
   settings: OrganizationSettings;
   products: Product[];
   customers: Customer[];
+  suppliers: Supplier[];
+  purchases: Purchase[];
   invoices: Invoice[];
   movements: StockMovement[];
   heldCarts: HeldCart[];

@@ -7,15 +7,18 @@ import type {
   Language,
   OrganizationSettings,
   PaymentMethod,
+  Purchase,
+  PurchasePaymentStatus,
 } from './types';
 import { translations } from './i18n';
 import { PosTerminalView } from './components/PosTerminalView';
 import { InventoryView } from './components/InventoryView';
+import { PurchasesView } from './components/PurchasesView';
 import { ZatcaCenterView } from './components/ZatcaCenterView';
 import { LaravelExporterView } from './components/LaravelExporterView';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 
-type ActiveSection = 'pos' | 'inventory' | 'zatca' | 'laravel';
+type ActiveSection = 'pos' | 'inventory' | 'purchases' | 'zatca' | 'laravel';
 
 interface ToastMessage {
   id: number;
@@ -245,6 +248,97 @@ export default function App() {
     notify(isAr ? 'تم تحديث الرصيد المخزني' : 'Stock updated');
   };
 
+  const handleCreateSupplier = async (payload: {
+    name_ar: string;
+    name_en: string;
+    vat_number: string;
+    cr_number: string;
+    phone: string;
+    email: string;
+    address_ar: string;
+  }): Promise<number> => {
+    const res = await fetch('/api/suppliers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      supplierId?: number;
+      suppliers?: BootstrapPayload['suppliers'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to add supplier', 'error');
+      return 0;
+    }
+    if (body.suppliers) {
+      setData((prev) => (prev ? { ...prev, suppliers: body.suppliers! } : prev));
+    }
+    notify(isAr ? 'تمت إضافة المورد بنجاح' : 'Supplier added');
+    return body.supplierId ?? 0;
+  };
+
+  const handleCreatePurchase = async (payload: {
+    supplier_id: number;
+    supplier_invoice_no: string;
+    payment_status: PurchasePaymentStatus;
+    paid_amount: number;
+    notes: string;
+    items: Array<{ product_id: number; qty: number; unit_cost: number; tax_rate: number }>;
+  }) => {
+    const res = await fetch('/api/purchases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      purchase?: Purchase;
+      purchases?: BootstrapPayload['purchases'];
+      products?: BootstrapPayload['products'];
+      movements?: BootstrapPayload['movements'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to record purchase', 'error');
+      return;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            purchases: body.purchases ?? prev.purchases,
+            products: body.products ?? prev.products,
+            movements: body.movements ?? prev.movements,
+          }
+        : prev
+    );
+    notify(
+      isAr
+        ? `تم تسجيل فاتورة المشتريات ${body.purchase?.purchase_number ?? ''} وتحديث المخزون`
+        : `Purchase ${body.purchase?.purchase_number ?? ''} recorded & stock updated`
+    );
+  };
+
+  const handlePayPurchase = async (purchaseId: number, amount: number) => {
+    const res = await fetch(`/api/purchases/${purchaseId}/pay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount }),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      purchases?: BootstrapPayload['purchases'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Payment failed', 'error');
+      return;
+    }
+    if (body.purchases) {
+      setData((prev) => (prev ? { ...prev, purchases: body.purchases! } : prev));
+    }
+    notify(isAr ? 'تم تسجيل دفعة السداد للمورد' : 'Supplier payment recorded');
+  };
+
   const handleUpdateSettings = async (payload: Partial<OrganizationSettings>) => {
     const res = await fetch('/api/settings', {
       method: 'PUT',
@@ -354,12 +448,13 @@ export default function App() {
             {t.brand}
           </a>
 
-          {/* Zone 2: 4 single-line Navigation Links */}
+          {/* Zone 2: 5 single-line Navigation Links */}
           <nav className="flex items-center gap-5 sm:gap-7 text-sm font-medium overflow-x-auto">
             {(
               [
                 ['pos', t.navPos],
                 ['inventory', t.navInventory],
+                ['purchases', t.navPurchases],
                 ['zatca', t.navZatca],
                 ['laravel', t.navLaravel],
               ] as const
@@ -474,6 +569,19 @@ export default function App() {
                 onCreateProduct={handleCreateProduct}
                 onUpdateProduct={handleUpdateProduct}
                 onStockMovement={handleStockMovement}
+              />
+            )}
+
+            {section === 'purchases' && (
+              <PurchasesView
+                lang={lang}
+                products={data.products}
+                suppliers={data.suppliers}
+                purchases={data.purchases}
+                onCreatePurchase={handleCreatePurchase}
+                onPayPurchase={handlePayPurchase}
+                onCreateSupplier={handleCreateSupplier}
+                onNotify={notify}
               />
             )}
 

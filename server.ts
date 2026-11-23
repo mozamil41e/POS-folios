@@ -8,6 +8,8 @@ import {
   getAllCustomers,
   getAllInvoices,
   getAllProducts,
+  getAllPurchases,
+  getAllSuppliers,
   getHeldCarts,
   getOrganizationSettings,
   getRecentMovements,
@@ -31,6 +33,9 @@ import type {
   InvoiceTypeCode,
   PaymentMethod,
   Product,
+  Purchase,
+  PurchasePaymentStatus,
+  Supplier,
   ZatcaMode,
 } from './src/types.ts';
 
@@ -45,6 +50,8 @@ app.get('/api/bootstrap', (_req: Request, res: Response) => {
     settings: getOrganizationSettings(),
     products: getAllProducts(),
     customers: getAllCustomers(),
+    suppliers: getAllSuppliers(),
+    purchases: getAllPurchases(),
     invoices: getAllInvoices(),
     movements: getRecentMovements(80),
     heldCarts: getHeldCarts(),
@@ -483,6 +490,257 @@ app.post('/api/inventory/movement', (req: Request, res: Response) => {
         : 'Inventory movement failed.',
     });
   }
+});
+
+// Suppliers & Purchases CRUD
+app.post('/api/suppliers', (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const nameAr = String(b.name_ar ?? '').trim();
+  const nameEn = String(b.name_en ?? '').trim() || nameAr;
+  const vatNumber = String(b.vat_number ?? '').trim();
+  const crNumber = String(b.cr_number ?? '').trim();
+  const phone = String(b.phone ?? '').trim();
+  const email = String(b.email ?? '').trim();
+  const addressAr = String(b.address_ar ?? '').trim();
+
+  if (!nameAr) {
+    res.status(400).json({ error: 'Supplier name is required.' });
+    return;
+  }
+
+  const info = db
+    .prepare(`
+      INSERT INTO suppliers (name_ar, name_en, vat_number, cr_number, phone, email, address_ar, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(nameAr, nameEn, vatNumber, crNumber, phone, email, addressAr, new Date().toISOString());
+
+  res.status(201).json({
+    supplierId: info.lastInsertRowid,
+    suppliers: getAllSuppliers(),
+  });
+});
+
+app.put('/api/suppliers/:id', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id) as Supplier | undefined;
+  if (!existing) {
+    res.status(404).json({ error: 'Supplier not found.' });
+    return;
+  }
+
+  const b = req.body as Record<string, unknown>;
+  db.prepare(`
+    UPDATE suppliers
+    SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?, phone = ?, email = ?, address_ar = ?
+    WHERE id = ?
+  `).run(
+    String(b.name_ar ?? existing.name_ar).trim(),
+    String(b.name_en ?? existing.name_en).trim(),
+    String(b.vat_number ?? existing.vat_number).trim(),
+    String(b.cr_number ?? existing.cr_number).trim(),
+    String(b.phone ?? existing.phone).trim(),
+    String(b.email ?? existing.email).trim(),
+    String(b.address_ar ?? existing.address_ar).trim(),
+    id
+  );
+
+  res.json({ suppliers: getAllSuppliers() });
+});
+
+app.post('/api/purchases', (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const supplierId = Number(b.supplier_id);
+  const supplierInvoiceNo = String(b.supplier_invoice_no ?? '').trim();
+  const paymentStatus: PurchasePaymentStatus =
+    b.payment_status === 'credit' || b.payment_status === 'partial'
+      ? (b.payment_status as PurchasePaymentStatus)
+      : 'paid';
+  const notes = String(b.notes ?? '').trim();
+  const rawItems = Array.isArray(b.items) ? (b.items as Array<Record<string, unknown>>) : [];
+
+  if (!supplierId || rawItems.length === 0) {
+    res.status(400).json({ error: 'Supplier and at least one line item are required.' });
+    return;
+  }
+
+  try {
+    const createPurchaseTx = db.transaction(() => {
+      const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(supplierId) as
+        | Supplier
+        | undefined;
+      if (!supplier) {
+        throw new Error('SUPPLIER_NOT_FOUND');
+      }
+
+      const now = new Date().toISOString();
+      const countRow = db.prepare('SELECT COUNT(*) as cnt FROM purchases').get() as { cnt: number };
+      const nextNum = countRow.cnt + 1;
+      const purchaseNumber = `PO-${now.slice(0, 4)}-${String(nextNum).padStart(5, '0')}`;
+
+      let subtotal = 0;
+      let vatTotal = 0;
+      const preparedItems: Array<{
+        product: Product;
+        qty: number;
+        unitCost: number;
+        taxRate: number;
+        lineSub: number;
+        lineVat: number;
+        lineTotal: number;
+      }> = [];
+
+      for (const entry of rawItems) {
+        const productId = Number(entry.product_id);
+        const qty = Math.floor(Number(entry.qty ?? 0));
+        const unitCost = Number(entry.unit_cost ?? 0);
+        const taxRate = Number(entry.tax_rate ?? 15);
+        if (qty <= 0 || Number.isNaN(unitCost) || unitCost < 0) {
+          throw new Error('INVALID_PURCHASE_LINE');
+        }
+
+        const product = db
+          .prepare('SELECT * FROM products WHERE id = ? AND active = 1')
+          .get(productId) as Product | undefined;
+        if (!product) {
+          throw new Error('PRODUCT_NOT_FOUND');
+        }
+
+        const lineSub = Number((qty * unitCost).toFixed(2));
+        const lineVat = Number((lineSub * (taxRate / 100)).toFixed(2));
+        const lineTotal = Number((lineSub + lineVat).toFixed(2));
+        subtotal += lineSub;
+        vatTotal += lineVat;
+
+        preparedItems.push({
+          product,
+          qty,
+          unitCost,
+          taxRate,
+          lineSub,
+          lineVat,
+          lineTotal,
+        });
+      }
+
+      subtotal = Number(subtotal.toFixed(2));
+      vatTotal = Number(vatTotal.toFixed(2));
+      const grandTotal = Number((subtotal + vatTotal).toFixed(2));
+      const paidAmount =
+        paymentStatus === 'paid'
+          ? grandTotal
+          : paymentStatus === 'partial'
+          ? Math.min(grandTotal, Math.max(0, Number(b.paid_amount ?? 0)))
+          : 0;
+
+      const poInfo = db
+        .prepare(`
+          INSERT INTO purchases (
+            purchase_number, supplier_id, supplier_name, supplier_vat, supplier_invoice_no,
+            payment_status, paid_amount, subtotal, vat_total, grand_total, notes, received_at, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          purchaseNumber,
+          supplier.id,
+          supplier.name_ar,
+          supplier.vat_number,
+          supplierInvoiceNo,
+          paymentStatus,
+          paidAmount,
+          subtotal,
+          vatTotal,
+          grandTotal,
+          notes,
+          now,
+          now
+        );
+
+      const insertItemStmt = db.prepare(`
+        INSERT INTO purchase_items (
+          purchase_id, product_id, sku, name_ar, name_en, qty, unit_cost, tax_rate,
+          line_subtotal, line_vat, line_total
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const item of preparedItems) {
+        insertItemStmt.run(
+          poInfo.lastInsertRowid,
+          item.product.id,
+          item.product.sku,
+          item.product.name_ar,
+          item.product.name_en,
+          item.qty,
+          item.unitCost,
+          item.taxRate,
+          item.lineSub,
+          item.lineVat,
+          item.lineTotal
+        );
+
+        const newStock = item.product.stock_qty + item.qty;
+        db.prepare(
+          'UPDATE products SET stock_qty = ?, cost_price = ?, updated_at = ? WHERE id = ?'
+        ).run(newStock, item.unitCost, now, item.product.id);
+
+        db.prepare(`
+          INSERT INTO stock_movements (product_id, type, qty_delta, balance_after, reference_no, notes, created_at)
+          VALUES (?, 'purchase', ?, ?, ?, ?, ?)
+        `).run(
+          item.product.id,
+          item.qty,
+          newStock,
+          purchaseNumber,
+          `فاتورة مشتريات من ${supplier.name_ar}`,
+          now
+        );
+      }
+
+      return Number(poInfo.lastInsertRowid);
+    });
+
+    const purchaseId = createPurchaseTx();
+    const purchases = getAllPurchases();
+    res.status(201).json({
+      purchase: purchases.find((p) => p.id === purchaseId),
+      purchases,
+      products: getAllProducts(),
+      movements: getRecentMovements(80),
+    });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : 'Failed to create purchase invoice.',
+    });
+  }
+});
+
+app.post('/api/purchases/:id/pay', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const purchase = db.prepare('SELECT * FROM purchases WHERE id = ?').get(id) as
+    | Purchase
+    | undefined;
+  if (!purchase) {
+    res.status(404).json({ error: 'Purchase invoice not found.' });
+    return;
+  }
+
+  const amount = Number((req.body as Record<string, unknown>).amount ?? 0);
+  if (Number.isNaN(amount) || amount <= 0) {
+    res.status(400).json({ error: 'Positive payment amount is required.' });
+    return;
+  }
+
+  const nextPaid = Math.min(purchase.grand_total, Number((purchase.paid_amount + amount).toFixed(2)));
+  const nextStatus: PurchasePaymentStatus =
+    nextPaid >= purchase.grand_total - 0.01 ? 'paid' : 'partial';
+
+  db.prepare('UPDATE purchases SET paid_amount = ?, payment_status = ? WHERE id = ?').run(
+    nextPaid,
+    nextStatus,
+    id
+  );
+
+  res.json({ purchases: getAllPurchases() });
 });
 
 // Customers CRUD for B2B

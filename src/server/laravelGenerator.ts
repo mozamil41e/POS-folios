@@ -167,6 +167,44 @@ return new class extends Migration
             $table->timestamps();
         });
 
+        Schema::create('suppliers', function (Blueprint $table) {
+            $table->id();
+            $table->string('name_ar');
+            $table->string('name_en')->nullable();
+            $table->string('vat_number', 15)->nullable();
+            $table->string('cr_number')->nullable();
+            $table->string('phone')->nullable();
+            $table->string('address_ar')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('purchases', function (Blueprint $table) {
+            $table->id();
+            $table->string('purchase_number')->unique();
+            $table->foreignId('supplier_id')->constrained();
+            $table->string('supplier_invoice_no')->nullable();
+            $table->enum('payment_status', ['paid', 'credit', 'partial'])->default('paid');
+            $table->decimal('paid_amount', 12, 2)->default(0);
+            $table->decimal('subtotal', 12, 2);
+            $table->decimal('vat_total', 12, 2);
+            $table->decimal('grand_total', 12, 2);
+            $table->string('notes')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('purchase_items', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('purchase_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('product_id')->constrained();
+            $table->integer('qty');
+            $table->decimal('unit_cost', 10, 2);
+            $table->decimal('tax_rate', 5, 2)->default(15.00);
+            $table->decimal('line_subtotal', 12, 2);
+            $table->decimal('line_vat', 12, 2);
+            $table->decimal('line_total', 12, 2);
+            $table->timestamps();
+        });
+
         Schema::create('zatca_settings', function (Blueprint $table) {
             $table->id();
             $table->string('egs_serial');
@@ -937,20 +975,116 @@ class ZatcaOnboarding extends Component
 `,
     },
     {
+      path: 'app/Livewire/PurchaseManager.php',
+      language: 'php',
+      category: 'livewire',
+      description_ar: 'مكون Livewire 3 لإدارة فواتير المشتريات والموردين وتحديث المخزون والتكلفة تلقائياً',
+      description_en: 'Livewire 3 Purchases & Suppliers component that increments stock and updates product cost',
+      content: `<?php
+
+namespace App\\Livewire;
+
+use App\\Models\\Product;
+use App\\Models\\StockMovement;
+use Illuminate\\Support\\Facades\\DB;
+use Livewire\\Component;
+
+class PurchaseManager extends Component
+{
+    public ?int $supplierId = null;
+    public string $supplierInvoiceNo = '';
+    public string $paymentStatus = 'paid';
+    public array $lines = [];
+
+    public function addLine(int $productId, int $qty, float $unitCost): void
+    {
+        $product = Product::findOrFail($productId);
+        $this->lines[] = [
+            'product_id' => $product->id,
+            'name_ar' => $product->name_ar,
+            'qty' => $qty,
+            'unit_cost' => $unitCost,
+            'tax_rate' => (float) $product->tax_rate,
+        ];
+    }
+
+    public function savePurchase(): void
+    {
+        if (!$this->supplierId || empty($this->lines)) {
+            return;
+        }
+
+        DB::transaction(function () {
+            $subtotal = 0;
+            $vat = 0;
+            foreach ($this->lines as $line) {
+                $lineSub = $line['qty'] * $line['unit_cost'];
+                $subtotal += $lineSub;
+                $vat += $lineSub * ($line['tax_rate'] / 100);
+            }
+            $grandTotal = round($subtotal + $vat, 2);
+            $poNumber = 'PO-' . now()->format('Y') . '-' . str_pad((string) (DB::table('purchases')->count() + 1), 5, '0', STR_PAD_LEFT);
+
+            DB::table('purchases')->insert([
+                'purchase_number' => $poNumber,
+                'supplier_id' => $this->supplierId,
+                'supplier_invoice_no' => $this->supplierInvoiceNo,
+                'payment_status' => $this->paymentStatus,
+                'paid_amount' => $this->paymentStatus === 'paid' ? $grandTotal : 0,
+                'subtotal' => round($subtotal, 2),
+                'vat_total' => round($vat, 2),
+                'grand_total' => $grandTotal,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            foreach ($this->lines as $line) {
+                $product = Product::lockForUpdate()->findOrFail($line['product_id']);
+                $product->increment('stock_qty', $line['qty']);
+                $product->update(['cost_price' => $line['unit_cost']]);
+
+                StockMovement::create([
+                    'product_id' => $product->id,
+                    'type' => 'purchase',
+                    'qty_delta' => $line['qty'],
+                    'balance_after' => $product->stock_qty,
+                    'reference_no' => $poNumber,
+                ]);
+            }
+
+            $this->lines = [];
+            $this->supplierInvoiceNo = '';
+        });
+    }
+
+    public function render()
+    {
+        return view('livewire.purchase-manager', [
+            'purchases' => DB::table('purchases')->latest()->get(),
+            'suppliers' => DB::table('suppliers')->get(),
+            'products' => Product::where('active', true)->get(),
+        ]);
+    }
+}
+`,
+    },
+    {
       path: 'routes/web.php',
       language: 'php',
       category: 'config',
       description_ar: 'مسارات الويب لمكونات Livewire الرئيسية في النظام',
-      description_en: 'Laravel web routes binding POS, Inventory, and ZATCA Onboarding Livewire components',
+      description_en: 'Laravel web routes binding POS, Inventory, Purchases, and ZATCA Onboarding components',
       content: `<?php
 
 use App\\Livewire\\InventoryManager;
 use App\\Livewire\\PosTerminal;
+use App\\Livewire\\PurchaseManager;
 use App\\Livewire\\ZatcaOnboarding;
 use Illuminate\\Support\\Facades\\Route;
 
 Route::get('/', PosTerminal::class)->name('pos.terminal');
 Route::get('/inventory', InventoryManager::class)->name('inventory.index');
+Route::get('/purchases', PurchaseManager::class)->name('purchases.index');
 Route::get('/zatca-onboarding', ZatcaOnboarding::class)->name('zatca.onboarding');
 `,
     },

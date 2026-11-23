@@ -9,7 +9,10 @@ import type {
   InvoiceItem,
   OrganizationSettings,
   Product,
+  Purchase,
+  PurchaseItem,
   StockMovement,
+  Supplier,
 } from '../types.ts';
 import {
   GENESIS_PIH,
@@ -156,6 +159,52 @@ export function initDatabase(): void {
       invoice_subtype TEXT NOT NULL DEFAULT '0200000',
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      vat_number TEXT NOT NULL DEFAULT '',
+      cr_number TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      address_ar TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_number TEXT NOT NULL UNIQUE,
+      supplier_id INTEGER NOT NULL,
+      supplier_name TEXT NOT NULL,
+      supplier_vat TEXT NOT NULL DEFAULT '',
+      supplier_invoice_no TEXT NOT NULL DEFAULT '',
+      payment_status TEXT NOT NULL DEFAULT 'paid',
+      paid_amount REAL NOT NULL DEFAULT 0,
+      subtotal REAL NOT NULL,
+      vat_total REAL NOT NULL,
+      grand_total REAL NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      received_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      sku TEXT NOT NULL,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      qty INTEGER NOT NULL,
+      unit_cost REAL NOT NULL,
+      tax_rate REAL NOT NULL DEFAULT 15,
+      line_subtotal REAL NOT NULL,
+      line_vat REAL NOT NULL,
+      line_total REAL NOT NULL,
+      FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
+    );
   `);
 
   const existingOrg = db
@@ -289,6 +338,14 @@ export function initDatabase(): void {
 
   if (invCountRow.cnt === 0) {
     seedInitialInvoices();
+  }
+
+  const supCountRow = db
+    .prepare('SELECT COUNT(*) as cnt FROM suppliers')
+    .get() as { cnt: number };
+
+  if (supCountRow.cnt === 0) {
+    seedInitialSuppliersAndPurchases();
   }
 }
 
@@ -487,6 +544,127 @@ function seedInitialInvoices(): void {
   ).run(currentIcv, currentPih);
 }
 
+function seedInitialSuppliersAndPurchases(): void {
+  const now = new Date().toISOString();
+  const insertSup = db.prepare(`
+    INSERT INTO suppliers (name_ar, name_en, vat_number, cr_number, phone, email, address_ar, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const sup1 = insertSup.run(
+    'شركة المراعي للتوريد الغذائي',
+    'Almarai Wholesale Supply Co.',
+    '300051472900003',
+    '1010084221',
+    '0114700005',
+    'supply@almarai-dist.sa',
+    'الرياض - المدينة الصناعية الثانية',
+    now
+  );
+  const sup2 = insertSup.run(
+    'مؤسسة النخبة للسلع الاستهلاكية',
+    'Al-Nokhba FMCG Trading Est.',
+    '310294857100003',
+    '4030118944',
+    '0503349911',
+    'orders@nokhba-fmcg.sa',
+    'جدة - طريق الملك عبدالعزيز',
+    now
+  );
+  insertSup.run(
+    'شركة الجوف الزراعية للتجارة',
+    'Al-Jouf Agricultural Trading',
+    '300772194400003',
+    '3400005112',
+    '0558812200',
+    'sales@aljouf-agri.sa',
+    'سكاكا - منطقة الجوف',
+    now
+  );
+
+  const products = getAllProducts();
+  if (products.length >= 4) {
+    const p1Date = new Date(Date.now() - 86_400_000 * 2).toISOString();
+    const p1Items = [
+      { prod: products[0], qty: 24, cost: products[0].cost_price },
+      { prod: products[7], qty: 18, cost: products[7].cost_price },
+    ];
+    const p1Sub = Number(p1Items.reduce((s, i) => s + i.qty * i.cost, 0).toFixed(2));
+    const p1Vat = Number((p1Sub * 0.15).toFixed(2));
+    const p1Grand = Number((p1Sub + p1Vat).toFixed(2));
+
+    const po1 = db
+      .prepare(`
+        INSERT INTO purchases (
+          purchase_number, supplier_id, supplier_name, supplier_vat, supplier_invoice_no,
+          payment_status, paid_amount, subtotal, vat_total, grand_total, notes, received_at, created_at
+        ) VALUES ('PO-2026-00001', ?, 'شركة المراعي للتوريد الغذائي', '300051472900003', 'SUP-INV-9921', 'paid', ?, ?, ?, ?, 'توريد ألبان أسبوعي', ?, ?)
+      `)
+      .run(sup1.lastInsertRowid, p1Grand, p1Sub, p1Vat, p1Grand, p1Date, p1Date);
+
+    const insertPoItem = db.prepare(`
+      INSERT INTO purchase_items (
+        purchase_id, product_id, sku, name_ar, name_en, qty, unit_cost, tax_rate,
+        line_subtotal, line_vat, line_total
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const item of p1Items) {
+      const lSub = Number((item.qty * item.cost).toFixed(2));
+      const lVat = Number((lSub * 0.15).toFixed(2));
+      insertPoItem.run(
+        po1.lastInsertRowid,
+        item.prod.id,
+        item.prod.sku,
+        item.prod.name_ar,
+        item.prod.name_en,
+        item.qty,
+        item.cost,
+        15,
+        lSub,
+        lVat,
+        Number((lSub + lVat).toFixed(2))
+      );
+    }
+
+    const p2Date = new Date(Date.now() - 86_400_000).toISOString();
+    const p2Items = [
+      { prod: products[1], qty: 20, cost: products[1].cost_price },
+      { prod: products[10], qty: 30, cost: products[10].cost_price },
+    ];
+    const p2Sub = Number(p2Items.reduce((s, i) => s + i.qty * i.cost, 0).toFixed(2));
+    const p2Vat = Number((p2Sub * 0.15).toFixed(2));
+    const p2Grand = Number((p2Sub + p2Vat).toFixed(2));
+
+    const po2 = db
+      .prepare(`
+        INSERT INTO purchases (
+          purchase_number, supplier_id, supplier_name, supplier_vat, supplier_invoice_no,
+          payment_status, paid_amount, subtotal, vat_total, grand_total, notes, received_at, created_at
+        ) VALUES ('PO-2026-00002', ?, 'مؤسسة النخبة للسلع الاستهلاكية', '310294857100003', 'NK-2026-441', 'credit', 0, ?, ?, ?, 'فاتورة مشتريات آجلة لمدة 30 يوماً', ?, ?)
+      `)
+      .run(sup2.lastInsertRowid, p2Sub, p2Vat, p2Grand, p2Date, p2Date);
+
+    for (const item of p2Items) {
+      const lSub = Number((item.qty * item.cost).toFixed(2));
+      const lVat = Number((lSub * 0.15).toFixed(2));
+      insertPoItem.run(
+        po2.lastInsertRowid,
+        item.prod.id,
+        item.prod.sku,
+        item.prod.name_ar,
+        item.prod.name_en,
+        item.qty,
+        item.cost,
+        15,
+        lSub,
+        lVat,
+        Number((lSub + lVat).toFixed(2))
+      );
+    }
+  }
+}
+
 export function getOrganizationSettings(): OrganizationSettings {
   return db
     .prepare('SELECT * FROM organization_settings WHERE id = 1')
@@ -503,6 +681,23 @@ export function getAllCustomers(): Customer[] {
   return db
     .prepare('SELECT * FROM customers ORDER BY id ASC')
     .all() as Customer[];
+}
+
+export function getAllSuppliers(): Supplier[] {
+  return db
+    .prepare('SELECT * FROM suppliers ORDER BY id DESC')
+    .all() as Supplier[];
+}
+
+export function getAllPurchases(): Purchase[] {
+  const purchases = db
+    .prepare('SELECT * FROM purchases ORDER BY id DESC LIMIT 100')
+    .all() as Purchase[];
+  const itemsStmt = db.prepare('SELECT * FROM purchase_items WHERE purchase_id = ?');
+  return purchases.map((p) => ({
+    ...p,
+    items: itemsStmt.all(p.id) as PurchaseItem[],
+  }));
 }
 
 export function getRecentMovements(limit = 50): StockMovement[] {
