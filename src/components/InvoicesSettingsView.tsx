@@ -1,43 +1,167 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Check,
-  Copy,
-  ExternalLink,
-  Printer,
-  RotateCcw,
-  Search,
-  Settings2,
-} from 'lucide-react';
-import type { FontSizeLevel, Invoice, Language, OrganizationSettings } from '../types';
-import { formatDateTime, formatMoney } from '../i18n';
-import { buildPublicInvoiceUrl } from './InvoiceReceiptModal';
-import { TablePagination, useTablePagination } from './TablePagination';
+import { useEffect, useState } from 'react';
+import { BarChart3, Settings2, Users } from 'lucide-react';
+import type {
+  AuthUser,
+  Customer,
+  FontSizeLevel,
+  Invoice,
+  Language,
+  ManagedUser,
+  OrganizationSettings,
+  PermissionKey,
+  Product,
+  Purchase,
+  RoleRecord,
+  StockMovement,
+  Supplier,
+  Voucher,
+  VoucherChannel,
+  VoucherType,
+} from '../types';
+import { hasPermission } from '../permissions';
+import { ReportsCenterView } from './ReportsCenterView';
+import { UsersPermissionsView } from './UsersPermissionsView';
+
+export type ReportsSettingsSubTab = 'reports' | 'settings' | 'users';
 
 interface InvoicesSettingsViewProps {
   lang: Language;
+  currentUser: AuthUser;
+  requestedTab?: ReportsSettingsSubTab;
+  onRequestedTabHandled?: () => void;
   settings: OrganizationSettings;
   invoices: Invoice[];
-  onOpenReceipt: (invoice: Invoice) => void;
-  onCreditNote: (invoiceId: number) => Promise<void>;
+  products: Product[];
+  customers: Customer[];
+  suppliers: Supplier[];
+  purchases: Purchase[];
+  movements: StockMovement[];
+  vouchers: Voucher[];
+  users: ManagedUser[];
+  roles: RoleRecord[];
+  onCreateVoucher: (payload: {
+    voucher_type: VoucherType;
+    payment_channel: VoucherChannel;
+    party_name: string;
+    category: string;
+    amount: number;
+    notes: string;
+    voucher_date: string;
+  }) => Promise<void>;
+  onDeleteVoucher: (id: number) => Promise<void>;
+  onStockMovement: (payload: {
+    product_id: number;
+    type: 'purchase' | 'adjustment' | 'return';
+    qty: number;
+    notes: string;
+    reference_no?: string;
+  }) => Promise<void>;
   onUpdateSettings: (payload: Partial<OrganizationSettings>) => Promise<void>;
+  onCreateUser: (payload: {
+    full_name: string;
+    email: string;
+    phone: string;
+    password: string;
+    role_id: number;
+    is_active: boolean;
+  }) => Promise<boolean>;
+  onUpdateUser: (
+    id: number,
+    payload: {
+      full_name: string;
+      email: string;
+      phone: string;
+      password?: string;
+      role_id: number;
+      is_active: boolean;
+    }
+  ) => Promise<boolean>;
+  onDeleteUser: (id: number) => Promise<boolean>;
+  onCreateRole: (payload: {
+    name_ar: string;
+    name_en: string;
+    description_ar: string;
+    description_en: string;
+    permissions: PermissionKey[];
+  }) => Promise<RoleRecord | null>;
+  onUpdateRole: (
+    id: number,
+    payload: {
+      name_ar: string;
+      name_en: string;
+      description_ar: string;
+      description_en: string;
+      permissions: PermissionKey[];
+    }
+  ) => Promise<boolean>;
+  onDeleteRole: (id: number) => Promise<boolean>;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
 }
 
 export function InvoicesSettingsView({
   lang,
+  currentUser,
+  requestedTab,
+  onRequestedTabHandled,
   settings,
   invoices,
-  onOpenReceipt,
-  onCreditNote,
+  products,
+  customers,
+  suppliers,
+  purchases,
+  movements,
+  vouchers,
+  users,
+  roles,
+  onCreateVoucher,
+  onDeleteVoucher,
+  onStockMovement,
   onUpdateSettings,
+  onCreateUser,
+  onUpdateUser,
+  onDeleteUser,
+  onCreateRole,
+  onUpdateRole,
+  onDeleteRole,
   onNotify,
 }: InvoicesSettingsViewProps) {
   const isAr = lang === 'ar';
 
-  const [tab, setTab] = useState<'invoices' | 'settings'>('invoices');
-  const [search, setSearch] = useState('');
-  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const canReports = hasPermission(currentUser, 'reports.view');
+  const canSettings = hasPermission(currentUser, 'settings.manage');
+  const canUsers = hasPermission(currentUser, 'users.manage');
+
+  const defaultAllowedTab: ReportsSettingsSubTab = canReports
+    ? 'reports'
+    : canSettings
+    ? 'settings'
+    : 'users';
+
+  const [tab, setTab] = useState<ReportsSettingsSubTab>(defaultAllowedTab);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (requestedTab) {
+      if (
+        (requestedTab === 'reports' && canReports) ||
+        (requestedTab === 'settings' && canSettings) ||
+        (requestedTab === 'users' && canUsers)
+      ) {
+        setTab(requestedTab);
+      }
+      onRequestedTabHandled?.();
+    }
+  }, [requestedTab, canReports, canSettings, canUsers, onRequestedTabHandled]);
+
+  useEffect(() => {
+    if (
+      (tab === 'reports' && !canReports) ||
+      (tab === 'settings' && !canSettings) ||
+      (tab === 'users' && !canUsers)
+    ) {
+      setTab(defaultAllowedTab);
+    }
+  }, [tab, canReports, canSettings, canUsers, defaultAllowedTab]);
 
   const [form, setForm] = useState({
     name_ar: settings.name_ar,
@@ -71,50 +195,8 @@ export function InvoicesSettingsView({
     });
   }, [settings]);
 
-  const metrics = useMemo(() => {
-    const salesInvoices = invoices.filter((i) => i.invoice_type_code === '388');
-    const totalSales = salesInvoices.reduce((s, i) => s + i.grand_total, 0);
-    const totalVat = salesInvoices.reduce((s, i) => s + i.vat_total, 0);
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const todaySales = salesInvoices
-      .filter((i) => i.created_at.startsWith(todayIso))
-      .reduce((s, i) => s + i.grand_total, 0);
-
-    return {
-      count: invoices.length,
-      totalSales,
-      totalVat,
-      todaySales,
-    };
-  }, [invoices]);
-
-  const filteredInvoices = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return invoices;
-    return invoices.filter(
-      (inv) =>
-        inv.invoice_number.toLowerCase().includes(q) ||
-        inv.customer_name.toLowerCase().includes(q) ||
-        inv.uuid.toLowerCase().includes(q)
-    );
-  }, [invoices, search]);
-
-  const invoicesPagination = useTablePagination(
-    filteredInvoices,
-    settings.table_page_size || 10,
-    search
-  );
-
   const effectiveBaseUrl =
     form.public_base_url.trim().replace(/\/+$/, '') || window.location.origin;
-
-  const handleCopyLink = async (inv: Invoice) => {
-    const url = buildPublicInvoiceUrl(inv.uuid, settings.public_base_url);
-    await navigator.clipboard.writeText(url);
-    setCopiedId(inv.id);
-    onNotify(isAr ? 'تم نسخ رابط الفاتورة العام' : 'Public invoice URL copied');
-    setTimeout(() => setCopiedId(null), 1600);
-  };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,11 +227,11 @@ export function InvoicesSettingsView({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900 dark:text-white">
-            {isAr ? 'فواتير المبيعات وإعدادات الطابعة الحرارية' : 'Sales Invoices & Thermal Print Settings'}
+            {isAr ? 'التقارير والإعدادات العامة' : 'Financial Reports & General Settings'}
           </h1>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1">
             <span>
-              {isAr ? 'هيئة الزكاة (ZATCA): معطلة' : 'ZATCA Integration: Disabled'}
+              {isAr ? 'التقارير المالية والمحاسبية والتشغيلية' : 'Financial, accounting & operational reports'}
             </span>
             <span aria-hidden="true">·</span>
             <span className="font-mono">
@@ -162,224 +244,82 @@ export function InvoicesSettingsView({
           </div>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg self-start">
-          <button
-            type="button"
-            onClick={() => setTab('invoices')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-              tab === 'invoices'
-                ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300'
-            }`}
-          >
-            {isAr ? 'سجل الفواتير' : 'Invoices Log'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('settings')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-              tab === 'settings'
-                ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300'
-            }`}
-          >
-            <Settings2 className="w-3.5 h-3.5" />
-            {isAr ? 'الطابعة والرابط العام' : 'Printer & Base URL'}
-          </button>
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg self-start">
+          {canReports && (
+            <button
+              type="button"
+              onClick={() => setTab('reports')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                tab === 'reports'
+                  ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              {isAr ? 'التقارير' : 'Reports'}
+            </button>
+          )}
+          {canSettings && (
+            <button
+              type="button"
+              onClick={() => setTab('settings')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                tab === 'settings'
+                  ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              {isAr ? 'الإعدادات والطابعة' : 'Settings & Printer'}
+            </button>
+          )}
+          {canUsers && (
+            <button
+              type="button"
+              onClick={() => setTab('users')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                tab === 'users'
+                  ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              {isAr ? 'المستخدمون والصلاحيات' : 'Users & Permissions'}
+            </button>
+          )}
         </div>
       </div>
 
-      {tab === 'invoices' ? (
-        <>
-          {/* KPI Strip */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {isAr ? 'إجمالي المبيعات' : 'Total Sales'}
-              </div>
-              <div className="text-lg font-bold font-mono tabular-nums mt-1 text-emerald-700 dark:text-emerald-400">
-                {formatMoney(metrics.totalSales, lang)}
-              </div>
-            </div>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {isAr ? 'مبيعات اليوم' : "Today's Sales"}
-              </div>
-              <div className="text-lg font-bold font-mono tabular-nums mt-1 text-slate-900 dark:text-white">
-                {formatMoney(metrics.todaySales, lang)}
-              </div>
-            </div>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {isAr ? 'إجمالي الضريبة (15%)' : 'Total VAT (15%)'}
-              </div>
-              <div className="text-lg font-bold font-mono tabular-nums mt-1 text-slate-900 dark:text-white">
-                {formatMoney(metrics.totalVat, lang)}
-              </div>
-            </div>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {isAr ? 'عدد الفواتير' : 'Invoices Count'}
-              </div>
-              <div className="text-lg font-bold font-mono tabular-nums mt-1 text-slate-900 dark:text-white">
-                {metrics.count}
-              </div>
-            </div>
-          </div>
-
-          {/* Search Bar */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 flex items-center gap-3">
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={
-                  isAr
-                    ? 'ابحث برقم الفاتورة أو اسم العميل...'
-                    : 'Search by invoice # or customer...'
-                }
-                className="w-full ps-9 pe-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700/30"
-              />
-            </div>
-          </div>
-
-          {/* Invoices Table */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
-            <table className="w-full text-xs text-start">
-              <thead className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                <tr>
-                  <th className="py-3 px-4 text-start font-medium">
-                    {isAr ? 'رقم الفاتورة' : 'Invoice #'}
-                  </th>
-                  <th className="py-3 px-4 text-start font-medium">
-                    {isAr ? 'التاريخ' : 'Date'}
-                  </th>
-                  <th className="py-3 px-4 text-start font-medium">
-                    {isAr ? 'العميل' : 'Customer'}
-                  </th>
-                  <th className="py-3 px-4 text-start font-medium">
-                    {isAr ? 'الدفع' : 'Payment'}
-                  </th>
-                  <th className="py-3 px-4 text-end font-medium">
-                    {isAr ? 'الإجمالي' : 'Total'}
-                  </th>
-                  <th className="py-3 px-4 text-end font-medium">
-                    {isAr ? 'إجراءات الطباعة والرابط' : 'Print & Public Link'}
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {invoicesPagination.pagedItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-10 text-center text-slate-400">
-                      {isAr ? 'لا توجد فواتير مطابقة للبحث' : 'No matching invoices found'}
-                    </td>
-                  </tr>
-                ) : (
-                  invoicesPagination.pagedItems.map((inv) => {
-                  const isCredit = inv.invoice_type_code === '381';
-                  const payLabel =
-                    inv.payment_method === 'card'
-                      ? isAr
-                        ? 'مدى / شبكة'
-                        : 'Card'
-                      : inv.payment_method === 'split'
-                      ? isAr
-                        ? 'مقسم'
-                        : 'Split'
-                      : isAr
-                      ? 'نقدي'
-                      : 'Cash';
-
-                  return (
-                    <tr
-                      key={inv.id}
-                      className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
-                    >
-                      <td className="py-3 px-4">
-                        <div className="font-mono font-semibold text-slate-900 dark:text-white">
-                          {inv.invoice_number}
-                        </div>
-                        {isCredit && (
-                          <div className="text-[11px] text-amber-700 dark:text-amber-400">
-                            {isAr ? 'إشعار مرتجع' : 'Credit Note'}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-slate-500 tabular-nums">
-                        {formatDateTime(inv.created_at, lang)}
-                      </td>
-                      <td className="py-3 px-4 font-medium text-slate-700 dark:text-slate-200">
-                        {inv.customer_name}
-                      </td>
-                      <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
-                        {payLabel}
-                      </td>
-                      <td className="py-3 px-4 text-end font-mono font-bold tabular-nums text-slate-900 dark:text-white">
-                        {formatMoney(inv.grand_total, lang)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyLink(inv)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                          >
-                            {copiedId === inv.id ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                            {isAr ? 'نسخ الرابط' : 'Copy URL'}
-                          </button>
-                          <a
-                            href={`/i/${encodeURIComponent(inv.uuid)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            {isAr ? 'فتح' : 'Open'}
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => onOpenReceipt(inv)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-medium whitespace-nowrap"
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                            {isAr ? 'طباعة حرارية' : 'Thermal Print'}
-                          </button>
-                          {inv.invoice_type_code === '388' && (
-                            <button
-                              type="button"
-                              onClick={() => void onCreditNote(inv.id)}
-                              title={isAr ? 'إصدار مرتجع' : 'Issue Return'}
-                              className="p-1.5 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-                )}
-              </tbody>
-            </table>
-            <TablePagination
-              lang={lang}
-              currentPage={invoicesPagination.currentPage}
-              totalPages={invoicesPagination.totalPages}
-              totalItems={invoicesPagination.totalItems}
-              startItem={invoicesPagination.startItem}
-              endItem={invoicesPagination.endItem}
-              onPageChange={invoicesPagination.setPage}
-            />
-          </div>
-        </>
+      {tab === 'reports' && canReports ? (
+        <ReportsCenterView
+          lang={lang}
+          settings={settings}
+          invoices={invoices}
+          products={products}
+          customers={customers}
+          suppliers={suppliers}
+          purchases={purchases}
+          movements={movements}
+          vouchers={vouchers}
+          onCreateVoucher={onCreateVoucher}
+          onDeleteVoucher={onDeleteVoucher}
+          onStockMovement={onStockMovement}
+          onNotify={onNotify}
+        />
+      ) : tab === 'users' && canUsers ? (
+        <UsersPermissionsView
+          lang={lang}
+          currentUser={currentUser}
+          users={users}
+          roles={roles}
+          pageSize={settings.table_page_size || 10}
+          onCreateUser={onCreateUser}
+          onUpdateUser={onUpdateUser}
+          onDeleteUser={onDeleteUser}
+          onCreateRole={onCreateRole}
+          onUpdateRole={onUpdateRole}
+          onDeleteRole={onDeleteRole}
+        />
       ) : (
         /* TAB 2: Thermal Printer, Base URL & Store Settings */
         <form

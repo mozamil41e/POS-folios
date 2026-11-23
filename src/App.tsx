@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Globe, LogOut, Moon, Sun, User } from 'lucide-react';
 import type {
   AuthUser,
@@ -8,16 +8,25 @@ import type {
   Language,
   OrganizationSettings,
   PaymentMethod,
+  PermissionKey,
   Purchase,
   PurchasePaymentStatus,
+  RoleRecord,
+  Voucher,
+  VoucherChannel,
+  VoucherType,
 } from './types';
 import { translations } from './i18n';
+import { hasAnyPermission, hasPermission } from './permissions';
 import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
 import { SalesView } from './components/SalesView';
 import { InventoryView } from './components/InventoryView';
 import { PurchasesView } from './components/PurchasesView';
-import { InvoicesSettingsView } from './components/InvoicesSettingsView';
+import {
+  InvoicesSettingsView,
+  type ReportsSettingsSubTab,
+} from './components/InvoicesSettingsView';
 import { ZatcaCenterView } from './components/ZatcaCenterView';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 import { PublicInvoicePage } from './components/PublicInvoicePage';
@@ -81,6 +90,9 @@ export default function App() {
       authUser={authUser}
       onToggleLang={() => setLang((prev) => (prev === 'ar' ? 'en' : 'ar'))}
       onToggleDarkMode={() => setDarkMode((prev) => !prev)}
+      onAuthUserUpdated={(nextUser) => {
+        setAuthUser(nextUser);
+      }}
       onSessionExpired={() => {
         setAuthToken(null);
         setAuthUser(null);
@@ -96,6 +108,7 @@ interface PosWorkspaceProps {
   authUser: AuthUser;
   onToggleLang: () => void;
   onToggleDarkMode: () => void;
+  onAuthUserUpdated: (user: AuthUser) => void;
   onSessionExpired: () => void;
 }
 
@@ -106,9 +119,13 @@ function PosWorkspace({
   authUser,
   onToggleLang,
   onToggleDarkMode,
+  onAuthUserUpdated,
   onSessionExpired,
 }: PosWorkspaceProps) {
   const [section, setSection] = useState<ActiveSection>('pos');
+  const [requestedSubTab, setRequestedSubTab] = useState<ReportsSettingsSubTab | undefined>(
+    undefined
+  );
   const [data, setData] = useState<BootstrapPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +138,37 @@ function PosWorkspace({
   const t = translations[lang];
   const isAr = lang === 'ar';
   const zatcaEnabled = data?.settings.zatca_enabled === 1;
+
+  const allowedNavItems = useMemo(() => {
+    const items: Array<[ActiveSection, string]> = [];
+    if (hasPermission(authUser, 'pos.access')) {
+      items.push(['pos', t.navPos]);
+    }
+    if (hasAnyPermission(authUser, ['sales.view', 'sales.return', 'customers.manage'])) {
+      items.push(['sales', t.navSales]);
+    }
+    if (hasAnyPermission(authUser, ['inventory.view', 'inventory.manage', 'inventory.adjust'])) {
+      items.push(['inventory', t.navInventory]);
+    }
+    if (hasAnyPermission(authUser, ['purchases.view', 'purchases.manage'])) {
+      items.push(['purchases', t.navPurchases]);
+    }
+    if (hasAnyPermission(authUser, ['reports.view', 'settings.manage', 'users.manage'])) {
+      items.push(['invoices', t.navInvoices]);
+    }
+    if (zatcaEnabled && hasPermission(authUser, 'zatca.manage')) {
+      items.push(['zatca', t.navZatca]);
+    }
+    return items;
+  }, [authUser, t, zatcaEnabled]);
+
+  useEffect(() => {
+    if (allowedNavItems.length === 0) return;
+    if (!allowedNavItems.some(([key]) => key === section)) {
+      setSection(allowedNavItems[0][0]);
+    }
+  }, [allowedNavItems, section]);
+
   const isSellOnlyFullscreen = section === 'pos' && posFullscreen;
 
   const togglePosFullscreen = useCallback(() => {
@@ -406,6 +454,7 @@ function PosWorkspace({
     type: 'purchase' | 'adjustment' | 'return';
     qty: number;
     notes: string;
+    reference_no?: string;
   }) => {
     const res = await apiFetch('/api/inventory/movement', {
       method: 'POST',
@@ -524,6 +573,47 @@ function PosWorkspace({
     notify(isAr ? 'تم تسجيل دفعة السداد للمورد' : 'Supplier payment recorded');
   };
 
+  const handleCreateVoucher = async (payload: {
+    voucher_type: VoucherType;
+    payment_channel: VoucherChannel;
+    party_name: string;
+    category: string;
+    amount: number;
+    notes: string;
+    voucher_date: string;
+  }) => {
+    const res = await apiFetch('/api/vouchers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      vouchers?: Voucher[];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to save voucher', 'error');
+      return;
+    }
+    if (body.vouchers) {
+      setData((prev) => (prev ? { ...prev, vouchers: body.vouchers! } : prev));
+    }
+    notify(isAr ? 'تم حفظ السند بنجاح' : 'Voucher saved');
+  };
+
+  const handleDeleteVoucher = async (id: number) => {
+    const res = await apiFetch(`/api/vouchers/${id}`, { method: 'DELETE' });
+    const body = (await res.json()) as { error?: string; vouchers?: Voucher[] };
+    if (!res.ok) {
+      notify(body.error || 'Failed to delete voucher', 'error');
+      return;
+    }
+    if (body.vouchers) {
+      setData((prev) => (prev ? { ...prev, vouchers: body.vouchers! } : prev));
+    }
+    notify(isAr ? 'تم حذف السند' : 'Voucher deleted');
+  };
+
   const handleUpdateSettings = async (payload: Partial<OrganizationSettings>) => {
     const res = await apiFetch('/api/settings', {
       method: 'PUT',
@@ -621,6 +711,203 @@ function PosWorkspace({
     }
   };
 
+  const handleCreateUser = async (payload: {
+    full_name: string;
+    email: string;
+    phone: string;
+    password: string;
+    role_id: number;
+    is_active: boolean;
+  }): Promise<boolean> => {
+    const res = await apiFetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      users?: BootstrapPayload['users'];
+      roles?: BootstrapPayload['roles'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to create user', 'error');
+      return false;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            users: body.users ?? prev.users,
+            roles: body.roles ?? prev.roles,
+          }
+        : prev
+    );
+    notify(isAr ? 'تمت إضافة المستخدم بنجاح' : 'User created successfully');
+    return true;
+  };
+
+  const handleUpdateUser = async (
+    id: number,
+    payload: {
+      full_name: string;
+      email: string;
+      phone: string;
+      password?: string;
+      role_id: number;
+      is_active: boolean;
+    }
+  ): Promise<boolean> => {
+    const res = await apiFetch(`/api/users/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      users?: BootstrapPayload['users'];
+      roles?: BootstrapPayload['roles'];
+      currentUser?: AuthUser;
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to update user', 'error');
+      return false;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            users: body.users ?? prev.users,
+            roles: body.roles ?? prev.roles,
+          }
+        : prev
+    );
+    if (body.currentUser) {
+      onAuthUserUpdated(body.currentUser);
+    }
+    notify(isAr ? 'تم تحديث بيانات المستخدم' : 'User updated');
+    return true;
+  };
+
+  const handleDeleteUser = async (id: number): Promise<boolean> => {
+    const res = await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
+    const body = (await res.json()) as {
+      error?: string;
+      users?: BootstrapPayload['users'];
+      roles?: BootstrapPayload['roles'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to delete user', 'error');
+      return false;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            users: body.users ?? prev.users,
+            roles: body.roles ?? prev.roles,
+          }
+        : prev
+    );
+    notify(isAr ? 'تم حذف المستخدم' : 'User deleted');
+    return true;
+  };
+
+  const handleCreateRole = async (payload: {
+    name_ar: string;
+    name_en: string;
+    description_ar: string;
+    description_en: string;
+    permissions: PermissionKey[];
+  }): Promise<RoleRecord | null> => {
+    const res = await apiFetch('/api/roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      role?: RoleRecord;
+      roles?: BootstrapPayload['roles'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to create role', 'error');
+      return null;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            roles: body.roles ?? prev.roles,
+          }
+        : prev
+    );
+    notify(isAr ? 'تم إنشاء الدور الوظيفي' : 'Role created');
+    return body.role ?? null;
+  };
+
+  const handleUpdateRole = async (
+    id: number,
+    payload: {
+      name_ar: string;
+      name_en: string;
+      description_ar: string;
+      description_en: string;
+      permissions: PermissionKey[];
+    }
+  ): Promise<boolean> => {
+    const res = await apiFetch(`/api/roles/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      roles?: BootstrapPayload['roles'];
+      users?: BootstrapPayload['users'];
+      currentUser?: AuthUser;
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to update role', 'error');
+      return false;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            roles: body.roles ?? prev.roles,
+            users: body.users ?? prev.users,
+          }
+        : prev
+    );
+    if (body.currentUser) {
+      onAuthUserUpdated(body.currentUser);
+    }
+    notify(isAr ? 'تم حفظ صلاحيات الدور بنجاح' : 'Role permissions saved');
+    return true;
+  };
+
+  const handleDeleteRole = async (id: number): Promise<boolean> => {
+    const res = await apiFetch(`/api/roles/${id}`, { method: 'DELETE' });
+    const body = (await res.json()) as {
+      error?: string;
+      roles?: BootstrapPayload['roles'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to delete role', 'error');
+      return false;
+    }
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            roles: body.roles ?? prev.roles,
+          }
+        : prev
+    );
+    notify(isAr ? 'تم حذف الدور' : 'Role deleted');
+    return true;
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Strict 3-Zone Top Bar */}
@@ -632,24 +919,18 @@ function PosWorkspace({
               href="#pos"
               onClick={(e) => {
                 e.preventDefault();
-                setSection('pos');
+                if (allowedNavItems.length > 0) {
+                  setSection(allowedNavItems[0][0]);
+                }
               }}
               className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
             >
               {t.brand}
             </a>
 
-            {/* Zone 2: 5 single-line Navigation Links */}
+            {/* Zone 2: Single-line Permission-Gated Navigation Links */}
             <nav className="flex items-center gap-4 sm:gap-6 text-sm font-medium overflow-x-auto">
-              {(
-                [
-                  ['pos', t.navPos],
-                  ['sales', t.navSales],
-                  ['inventory', t.navInventory],
-                  ['purchases', t.navPurchases],
-                  zatcaEnabled ? ['zatca', t.navZatca] : ['invoices', t.navInvoices],
-                ] as Array<[ActiveSection, string]>
-              ).map(([key, label]) => (
+              {allowedNavItems.map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
@@ -666,25 +947,27 @@ function PosWorkspace({
             </nav>
 
             {/* Zone 3: 1 Primary Action */}
-            <div className="shrink-0 hidden sm:block">
-              <button
-                type="button"
-                onClick={() => {
-                  if (section !== 'pos') {
-                    setSection('pos');
-                  } else {
-                    togglePosFullscreen();
-                  }
-                }}
-                className="inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                {section !== 'pos'
-                  ? t.navPos
-                  : isAr
-                  ? 'شاشة البيع فقط'
-                  : 'Sell Fullscreen'}
-              </button>
-            </div>
+            {hasPermission(authUser, 'pos.access') && (
+              <div className="shrink-0 hidden sm:block">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (section !== 'pos') {
+                      setSection('pos');
+                    } else {
+                      togglePosFullscreen();
+                    }
+                  }}
+                  className="inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  {section !== 'pos'
+                    ? t.navPos
+                    : isAr
+                    ? 'شاشة البيع فقط'
+                    : 'Sell Fullscreen'}
+                </button>
+              </div>
+            )}
           </div>
         </header>
       )}
@@ -717,20 +1000,31 @@ function PosWorkspace({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (hasPermission(authUser, 'users.manage')) {
+                    setRequestedSubTab('users');
+                    setSection('invoices');
+                  }
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0 ${
+                  hasPermission(authUser, 'users.manage')
+                    ? 'hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer'
+                    : 'cursor-default'
+                }`}
+              >
                 <User className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
                 <span className="font-medium">{authUser.full_name}</span>
                 <span aria-hidden="true" className="text-slate-400">·</span>
                 <span className="text-slate-500 dark:text-slate-400">
-                  {authUser.role === 'admin'
-                    ? isAr
-                      ? 'مدير النظام'
-                      : 'Admin'
-                    : isAr
-                    ? 'كاشير'
-                    : 'Cashier'}
+                  {isAr ? authUser.role_name_ar : authUser.role_name_en}
                 </span>
-              </div>
+                <span aria-hidden="true" className="text-slate-400">·</span>
+                <span className="font-mono text-emerald-700 dark:text-emerald-400 tabular-nums">
+                  {authUser.permissions.length}
+                </span>
+              </button>
               <button
                 type="button"
                 onClick={onToggleLang}
@@ -844,14 +1138,29 @@ function PosWorkspace({
             {section === 'invoices' && (
               <InvoicesSettingsView
                 lang={lang}
+                currentUser={authUser}
+                requestedTab={requestedSubTab}
+                onRequestedTabHandled={() => setRequestedSubTab(undefined)}
                 settings={data.settings}
                 invoices={data.invoices}
-                onOpenReceipt={(inv) => {
-                  setAutoPrintModal(false);
-                  setReceiptInvoice(inv);
-                }}
-                onCreditNote={handleCreditNote}
+                products={data.products}
+                customers={data.customers}
+                suppliers={data.suppliers}
+                purchases={data.purchases}
+                movements={data.movements}
+                vouchers={data.vouchers ?? []}
+                users={data.users ?? []}
+                roles={data.roles ?? []}
+                onCreateVoucher={handleCreateVoucher}
+                onDeleteVoucher={handleDeleteVoucher}
+                onStockMovement={handleStockMovement}
                 onUpdateSettings={handleUpdateSettings}
+                onCreateUser={handleCreateUser}
+                onUpdateUser={handleUpdateUser}
+                onDeleteUser={handleDeleteUser}
+                onCreateRole={handleCreateRole}
+                onUpdateRole={handleUpdateRole}
+                onDeleteRole={handleDeleteRole}
                 onNotify={notify}
               />
             )}

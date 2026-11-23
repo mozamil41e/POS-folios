@@ -196,13 +196,81 @@ export interface Purchase {
   items?: PurchaseItem[];
 }
 
-export type UserRole = 'admin' | 'cashier';
+export type UserRole = string;
+
+export type PermissionKey =
+  | 'pos.access'
+  | 'pos.discount'
+  | 'pos.hold'
+  | 'sales.view'
+  | 'sales.return'
+  | 'customers.manage'
+  | 'inventory.view'
+  | 'inventory.manage'
+  | 'inventory.adjust'
+  | 'purchases.view'
+  | 'purchases.manage'
+  | 'reports.view'
+  | 'vouchers.manage'
+  | 'settings.manage'
+  | 'zatca.manage'
+  | 'users.manage';
+
+export interface RoleRecord {
+  id: number;
+  slug: string;
+  name_ar: string;
+  name_en: string;
+  description_ar: string;
+  description_en: string;
+  permissions: PermissionKey[];
+  is_system: number;
+  users_count?: number;
+  created_at: string;
+}
+
+export interface ManagedUser {
+  id: number;
+  full_name: string;
+  email: string;
+  phone: string;
+  role: UserRole;
+  role_id: number;
+  role_name_ar: string;
+  role_name_en: string;
+  permissions_count: number;
+  is_active: number;
+  last_login_at: string | null;
+  created_at: string;
+}
+
+export type VoucherType = 'receipt' | 'payment';
+export type VoucherChannel = 'cash' | 'bank';
+
+export interface Voucher {
+  id: number;
+  voucher_number: string;
+  voucher_type: VoucherType;
+  payment_channel: VoucherChannel;
+  party_name: string;
+  category: string;
+  amount: number;
+  notes: string;
+  voucher_date: string;
+  created_at: string;
+}
 
 export interface AuthUser {
   id: number;
   full_name: string;
   email: string;
+  phone?: string;
   role: UserRole;
+  role_id: number;
+  role_name_ar: string;
+  role_name_en: string;
+  permissions: PermissionKey[];
+  is_active: number;
   created_at: string;
 }
 
@@ -215,4 +283,7 @@ export interface BootstrapPayload {
   invoices: Invoice[];
   movements: StockMovement[];
   heldCarts: HeldCart[];
+  vouchers: Voucher[];
+  users?: ManagedUser[];
+  roles?: RoleRecord[];
 }

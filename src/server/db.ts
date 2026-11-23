@@ -8,14 +8,18 @@ import type {
   HeldCart,
   Invoice,
   InvoiceItem,
+  ManagedUser,
   OrganizationSettings,
+  PermissionKey,
   Product,
   Purchase,
   PurchaseItem,
+  RoleRecord,
   StockMovement,
   Supplier,
-  UserRole,
+  Voucher,
 } from '../types.ts';
+import { ALL_PERMISSION_KEYS, sanitizePermissions } from '../permissions.ts';
 import {
   GENESIS_PIH,
   buildUbl21Xml,
@@ -214,12 +218,28 @@ export function initDatabase(): void {
       FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS roles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      description_ar TEXT NOT NULL DEFAULT '',
+      description_en TEXT NOT NULL DEFAULT '',
+      permissions_json TEXT NOT NULL,
+      is_system INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       full_name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
+      phone TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'cashier',
+      role_id INTEGER,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_login_at TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -230,6 +250,19 @@ export function initDatabase(): void {
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS vouchers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      voucher_number TEXT NOT NULL UNIQUE,
+      voucher_type TEXT NOT NULL,
+      payment_channel TEXT NOT NULL DEFAULT 'cash',
+      party_name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      voucher_date TEXT NOT NULL,
+      created_at TEXT NOT NULL
     );
   `);
 
@@ -256,6 +289,23 @@ export function initDatabase(): void {
   if (!colNames.has('table_page_size')) {
     db.exec('ALTER TABLE organization_settings ADD COLUMN table_page_size INTEGER NOT NULL DEFAULT 10');
   }
+
+  const userCols = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  const userColNames = new Set(userCols.map((c) => c.name));
+  if (!userColNames.has('phone')) {
+    db.exec("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''");
+  }
+  if (!userColNames.has('role_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN role_id INTEGER');
+  }
+  if (!userColNames.has('is_active')) {
+    db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!userColNames.has('last_login_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+  }
+
+  seedAndMigrateRolesAndUsers();
 
   const existingOrg = db
     .prepare('SELECT id FROM organization_settings WHERE id = 1')
@@ -399,6 +449,62 @@ export function initDatabase(): void {
   if (supCountRow.cnt === 0) {
     seedInitialSuppliersAndPurchases();
   }
+
+  const voucherCountRow = db
+    .prepare('SELECT COUNT(*) as cnt FROM vouchers')
+    .get() as { cnt: number };
+
+  if (voucherCountRow.cnt === 0) {
+    seedInitialVouchers();
+  }
+}
+
+function seedInitialVouchers(): void {
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const yesterdayStr = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  const created = now.toISOString();
+
+  const insert = db.prepare(`
+    INSERT INTO vouchers (
+      voucher_number, voucher_type, payment_channel, party_name, category,
+      amount, notes, voucher_date, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insert.run(
+    'RCV-2026-00001',
+    'receipt',
+    'cash',
+    'عهدة الصندوق الافتتاحية',
+    'تغذية درج الكاشير',
+    1000,
+    'رصيد افتتاحي نقدي لدرج نقطة البيع',
+    yesterdayStr,
+    created
+  );
+  insert.run(
+    'PAY-2026-00001',
+    'payment',
+    'cash',
+    'شركة الكهرباء والخدمات',
+    'مصروفات تشغيلية',
+    280,
+    'فاتورة خدمات ومستلزمات تغليف',
+    todayStr,
+    created
+  );
+  insert.run(
+    'PAY-2026-00002',
+    'payment',
+    'bank',
+    'مؤسسة التوصيل السريع',
+    'نقل وشحن',
+    150,
+    'تكلفة توصيل طلبات عملاء',
+    todayStr,
+    created
+  );
 }
 
 function seedInitialInvoices(): void {
@@ -781,6 +887,12 @@ export function getHeldCarts(): HeldCart[] {
     .all() as HeldCart[];
 }
 
+export function getAllVouchers(): Voucher[] {
+  return db
+    .prepare('SELECT * FROM vouchers ORDER BY voucher_date DESC, id DESC LIMIT 300')
+    .all() as Voucher[];
+}
+
 export function getPublicInvoiceByUuid(uuid: string): {
   invoice: {
     uuid: string;
@@ -894,6 +1006,313 @@ export function hasAnyUsers(): boolean {
   return row.cnt > 0;
 }
 
+function seedAndMigrateRolesAndUsers(): void {
+  const now = new Date().toISOString();
+  const defaultRoles: Array<{
+    slug: string;
+    name_ar: string;
+    name_en: string;
+    description_ar: string;
+    description_en: string;
+    permissions: PermissionKey[];
+    is_system: number;
+  }> = [
+    {
+      slug: 'admin',
+      name_ar: 'مدير النظام',
+      name_en: 'System Admin',
+      description_ar: 'صلاحيات كاملة لإدارة جميع أقسام النظام والمستخدمين والأدوار',
+      description_en: 'Full administrative access across all modules, users, and roles',
+      permissions: [...ALL_PERMISSION_KEYS],
+      is_system: 1,
+    },
+    {
+      slug: 'manager',
+      name_ar: 'مشرف / مدير فرع',
+      name_en: 'Branch Manager',
+      description_ar: 'إدارة المبيعات والمخزون والمشتريات والتقارير والسندات دون تعديل المستخدمين',
+      description_en: 'Manage POS, sales, inventory, purchases, reports, and vouchers',
+      permissions: [
+        'pos.access',
+        'pos.discount',
+        'pos.hold',
+        'sales.view',
+        'sales.return',
+        'customers.manage',
+        'inventory.view',
+        'inventory.manage',
+        'inventory.adjust',
+        'purchases.view',
+        'purchases.manage',
+        'reports.view',
+        'vouchers.manage',
+      ],
+      is_system: 0,
+    },
+    {
+      slug: 'accountant',
+      name_ar: 'محاسب',
+      name_en: 'Accountant',
+      description_ar: 'الوصول للتقارير المالية، مراجعة المبيعات والمشتريات، وإدارة السندات',
+      description_en: 'Access financial reports, audit sales/purchases, and manage vouchers',
+      permissions: [
+        'sales.view',
+        'customers.manage',
+        'inventory.view',
+        'purchases.view',
+        'purchases.manage',
+        'reports.view',
+        'vouchers.manage',
+      ],
+      is_system: 0,
+    },
+    {
+      slug: 'cashier',
+      name_ar: 'كاشير',
+      name_en: 'Cashier',
+      description_ar: 'تنفيذ عمليات البيع في نقطة البيع، تعليق الفواتير، والاطلاع على العملاء والمخزون',
+      description_en: 'Operate POS checkout, hold carts, and view sales & stock balances',
+      permissions: [
+        'pos.access',
+        'pos.hold',
+        'sales.view',
+        'customers.manage',
+        'inventory.view',
+      ],
+      is_system: 0,
+    },
+  ];
+
+  const roleCount = db.prepare('SELECT COUNT(*) as cnt FROM roles').get() as { cnt: number };
+  if (roleCount.cnt === 0) {
+    const insertRole = db.prepare(`
+      INSERT INTO roles (
+        slug, name_ar, name_en, description_ar, description_en,
+        permissions_json, is_system, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const r of defaultRoles) {
+      insertRole.run(
+        r.slug,
+        r.name_ar,
+        r.name_en,
+        r.description_ar,
+        r.description_en,
+        JSON.stringify(r.permissions),
+        r.is_system,
+        now
+      );
+    }
+  } else {
+    // Ensure system admin role always retains full permissions
+    db.prepare('UPDATE roles SET permissions_json = ?, is_system = 1 WHERE slug = ?').run(
+      JSON.stringify(ALL_PERMISSION_KEYS),
+      'admin'
+    );
+  }
+
+  const allRoles = db.prepare('SELECT id, slug FROM roles').all() as Array<{
+    id: number;
+    slug: string;
+  }>;
+  const roleMap = new Map(allRoles.map((r) => [r.slug, r.id]));
+  const fallbackCashierId = roleMap.get('cashier') ?? allRoles[0]?.id ?? null;
+  const adminRoleId = roleMap.get('admin') ?? fallbackCashierId;
+
+  const unlinkedUsers = db
+    .prepare('SELECT id, role FROM users WHERE role_id IS NULL')
+    .all() as Array<{ id: number; role: string }>;
+
+  for (const u of unlinkedUsers) {
+    const resolvedId =
+      roleMap.get(u.role) ?? (u.role === 'admin' ? adminRoleId : fallbackCashierId);
+    if (resolvedId) {
+      db.prepare('UPDATE users SET role_id = ? WHERE id = ?').run(resolvedId, u.id);
+    }
+  }
+}
+
+interface RawRoleRow {
+  id: number;
+  slug: string;
+  name_ar: string;
+  name_en: string;
+  description_ar: string;
+  description_en: string;
+  permissions_json: string;
+  is_system: number;
+  users_count?: number;
+  created_at: string;
+}
+
+function mapRoleRow(row: RawRoleRow): RoleRecord {
+  let parsed: unknown = [];
+  try {
+    parsed = JSON.parse(row.permissions_json);
+  } catch {
+    parsed = [];
+  }
+  return {
+    id: row.id,
+    slug: row.slug,
+    name_ar: row.name_ar,
+    name_en: row.name_en,
+    description_ar: row.description_ar,
+    description_en: row.description_en,
+    permissions:
+      row.slug === 'admin' ? [...ALL_PERMISSION_KEYS] : sanitizePermissions(parsed),
+    is_system: row.is_system,
+    users_count: row.users_count ?? 0,
+    created_at: row.created_at,
+  };
+}
+
+export function getAllRoles(): RoleRecord[] {
+  const rows = db
+    .prepare(`
+      SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) as users_count
+      FROM roles r
+      ORDER BY r.is_system DESC, r.id ASC
+    `)
+    .all() as RawRoleRow[];
+  return rows.map(mapRoleRow);
+}
+
+export function getRoleById(id: number): RoleRecord | null {
+  const row = db
+    .prepare(`
+      SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) as users_count
+      FROM roles r
+      WHERE r.id = ?
+    `)
+    .get(id) as RawRoleRow | undefined;
+  return row ? mapRoleRow(row) : null;
+}
+
+export function getRoleBySlug(slug: string): RoleRecord | null {
+  const row = db
+    .prepare(`
+      SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) as users_count
+      FROM roles r
+      WHERE r.slug = ?
+    `)
+    .get(slug) as RawRoleRow | undefined;
+  return row ? mapRoleRow(row) : null;
+}
+
+export function getAllUsers(): ManagedUser[] {
+  const rows = db
+    .prepare(`
+      SELECT u.id, u.full_name, u.email, u.phone, u.role, u.role_id,
+             u.is_active, u.last_login_at, u.created_at,
+             COALESCE(r.name_ar, u.role) as role_name_ar,
+             COALESCE(r.name_en, u.role) as role_name_en,
+             COALESCE(r.permissions_json, '[]') as permissions_json,
+             COALESCE(r.slug, u.role) as role_slug
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role_id
+      ORDER BY u.id ASC
+    `)
+    .all() as Array<{
+    id: number;
+    full_name: string;
+    email: string;
+    phone: string;
+    role: string;
+    role_id: number | null;
+    is_active: number;
+    last_login_at: string | null;
+    created_at: string;
+    role_name_ar: string;
+    role_name_en: string;
+    permissions_json: string;
+    role_slug: string;
+  }>;
+
+  return rows.map((row) => {
+    let permsCount = 0;
+    if (row.role_slug === 'admin') {
+      permsCount = ALL_PERMISSION_KEYS.length;
+    } else {
+      try {
+        permsCount = sanitizePermissions(JSON.parse(row.permissions_json)).length;
+      } catch {
+        permsCount = 0;
+      }
+    }
+    return {
+      id: row.id,
+      full_name: row.full_name,
+      email: row.email,
+      phone: row.phone ?? '',
+      role: row.role_slug,
+      role_id: row.role_id ?? 0,
+      role_name_ar: row.role_name_ar,
+      role_name_en: row.role_name_en,
+      permissions_count: permsCount,
+      is_active: row.is_active ?? 1,
+      last_login_at: row.last_login_at ?? null,
+      created_at: row.created_at,
+    };
+  });
+}
+
+export function resolveAuthUserById(userId: number): AuthUser | null {
+  const row = db
+    .prepare(`
+      SELECT u.id, u.full_name, u.email, u.phone, u.role, u.role_id, u.is_active, u.created_at,
+             COALESCE(r.slug, u.role) as role_slug,
+             COALESCE(r.name_ar, u.role) as role_name_ar,
+             COALESCE(r.name_en, u.role) as role_name_en,
+             COALESCE(r.permissions_json, '[]') as permissions_json
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role_id
+      WHERE u.id = ?
+    `)
+    .get(userId) as
+    | {
+        id: number;
+        full_name: string;
+        email: string;
+        phone: string;
+        role: string;
+        role_id: number | null;
+        is_active: number;
+        created_at: string;
+        role_slug: string;
+        role_name_ar: string;
+        role_name_en: string;
+        permissions_json: string;
+      }
+    | undefined;
+
+  if (!row) return null;
+  let perms: PermissionKey[] = [];
+  if (row.role_slug === 'admin') {
+    perms = [...ALL_PERMISSION_KEYS];
+  } else {
+    try {
+      perms = sanitizePermissions(JSON.parse(row.permissions_json));
+    } catch {
+      perms = [];
+    }
+  }
+
+  return {
+    id: row.id,
+    full_name: row.full_name,
+    email: row.email,
+    phone: row.phone ?? '',
+    role: row.role_slug,
+    role_id: row.role_id ?? 0,
+    role_name_ar: row.role_name_ar,
+    role_name_en: row.role_name_en,
+    permissions: perms,
+    is_active: row.is_active ?? 1,
+    created_at: row.created_at,
+  };
+}
+
 export function createSessionForUser(userId: number): { token: string; expiresAt: string } {
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
@@ -920,34 +1339,23 @@ export function getUserBySessionToken(token: string): AuthUser | null {
 
   const row = db
     .prepare(`
-      SELECT u.id, u.full_name, u.email, u.role, u.created_at
+      SELECT u.id
       FROM user_sessions s
       JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = ? AND s.expires_at > ?
+      WHERE s.token_hash = ? AND s.expires_at > ? AND u.is_active = 1
     `)
-    .get(tokenHash, nowIso) as
-    | {
-        id: number;
-        full_name: string;
-        email: string;
-        role: string;
-        created_at: string;
-      }
-    | undefined;
+    .get(tokenHash, nowIso) as { id: number } | undefined;
 
   if (!row) return null;
-  const role: UserRole = row.role === 'admin' ? 'admin' : 'cashier';
-  return {
-    id: row.id,
-    full_name: row.full_name,
-    email: row.email,
-    role,
-    created_at: row.created_at,
-  };
+  return resolveAuthUserById(row.id);
 }
 
 export function revokeSessionToken(token: string): void {
   if (!token) return;
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(tokenHash);
+}
+
+export function revokeAllSessionsForUser(userId: number): void {
+  db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
 }

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import {
   createSessionForUser,
   db,
@@ -11,15 +11,22 @@ import {
   getAllInvoices,
   getAllProducts,
   getAllPurchases,
+  getAllRoles,
   getAllSuppliers,
+  getAllUsers,
+  getAllVouchers,
   getHeldCarts,
   getOrganizationSettings,
   getPublicInvoiceByUuid,
   getRecentMovements,
+  getRoleById,
+  getRoleBySlug,
   getUserBySessionToken,
   hasAnyUsers,
   hashPassword,
   initDatabase,
+  resolveAuthUserById,
+  revokeAllSessionsForUser,
   revokeSessionToken,
   verifyPassword,
 } from './src/server/db.ts';
@@ -30,18 +37,22 @@ import {
   generateEgsKeyPair,
   signXmlAndBuildQr,
 } from './src/server/zatca.ts';
+import { ALL_PERMISSION_KEYS, sanitizePermissions } from './src/permissions.ts';
 import type {
+  AuthUser,
   FontSizeLevel,
   Invoice,
   InvoiceItem,
   InvoiceSubtype,
   InvoiceTypeCode,
   PaymentMethod,
+  PermissionKey,
   Product,
   Purchase,
   PurchasePaymentStatus,
   Supplier,
-  UserRole,
+  VoucherChannel,
+  VoucherType,
   ZatcaMode,
 } from './src/types.ts';
 
@@ -97,28 +108,32 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       }
 
       const countRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
-      const role: UserRole = countRow.cnt === 0 ? 'admin' : 'cashier';
+      const targetSlug = countRow.cnt === 0 ? 'admin' : 'cashier';
+      const targetRole = getRoleBySlug(targetSlug);
       const now = new Date().toISOString();
       const passwordHash = hashPassword(password);
 
       const info = db
         .prepare(`
-          INSERT INTO users (full_name, email, password_hash, role, created_at)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, last_login_at, created_at)
+          VALUES (?, ?, '', ?, ?, ?, 1, ?, ?)
         `)
-        .run(fullName, email, passwordHash, role, now);
+        .run(
+          fullName,
+          email,
+          passwordHash,
+          targetRole?.slug ?? targetSlug,
+          targetRole?.id ?? null,
+          now,
+          now
+        );
 
       const userId = Number(info.lastInsertRowid);
       const session = createSessionForUser(userId);
+      const authUser = resolveAuthUserById(userId);
       return {
         token: session.token,
-        user: {
-          id: userId,
-          full_name: fullName,
-          email,
-          role,
-          created_at: now,
-        },
+        user: authUser,
       };
     });
 
@@ -144,15 +159,12 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   }
 
   const user = db
-    .prepare('SELECT id, full_name, email, password_hash, role, created_at FROM users WHERE email = ?')
+    .prepare('SELECT id, password_hash, is_active FROM users WHERE email = ?')
     .get(email) as
     | {
         id: number;
-        full_name: string;
-        email: string;
         password_hash: string;
-        role: string;
-        created_at: string;
+        is_active: number;
       }
     | undefined;
 
@@ -161,22 +173,27 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return;
   }
 
+  if (user.is_active === 0) {
+    res.status(403).json({
+      error: 'This account has been deactivated by an administrator.',
+    });
+    return;
+  }
+
+  db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(
+    new Date().toISOString(),
+    user.id
+  );
   const session = createSessionForUser(user.id);
-  const role: UserRole = user.role === 'admin' ? 'admin' : 'cashier';
+  const authUser = resolveAuthUserById(user.id);
   res.json({
     token: session.token,
-    user: {
-      id: user.id,
-      full_name: user.full_name,
-      email: user.email,
-      role,
-      created_at: user.created_at,
-    },
+    user: authUser,
   });
 });
 
 // Require valid Bearer session token for all private /api routes
-app.use('/api', (req: Request, res: Response, next) => {
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
   const user = getUserBySessionToken(token);
@@ -188,6 +205,19 @@ app.use('/api', (req: Request, res: Response, next) => {
   res.locals.authToken = token;
   next();
 });
+
+function requirePermission(permission: PermissionKey) {
+  return (_req: Request, res: Response, next: NextFunction) => {
+    const authUser = res.locals.authUser as AuthUser | undefined;
+    if (!authUser || authUser.is_active === 0 || !authUser.permissions.includes(permission)) {
+      res.status(403).json({
+        error: 'You do not have permission to perform this action.',
+      });
+      return;
+    }
+    next();
+  };
+}
 
 app.get('/api/auth/me', (_req: Request, res: Response) => {
   res.json({ user: res.locals.authUser });
@@ -201,6 +231,8 @@ app.post('/api/auth/logout', (_req: Request, res: Response) => {
 
 // Bootstrap entire workspace state
 app.get('/api/bootstrap', (_req: Request, res: Response) => {
+  const authUser = res.locals.authUser as AuthUser;
+  const canManageUsers = authUser.permissions.includes('users.manage');
   res.json({
     settings: getOrganizationSettings(),
     products: getAllProducts(),
@@ -210,11 +242,373 @@ app.get('/api/bootstrap', (_req: Request, res: Response) => {
     invoices: getAllInvoices(),
     movements: getRecentMovements(80),
     heldCarts: getHeldCarts(),
+    vouchers: getAllVouchers(),
+    ...(canManageUsers ? { users: getAllUsers(), roles: getAllRoles() } : {}),
   });
 });
 
+// Users & Roles Management (RBAC)
+app.get('/api/users', requirePermission('users.manage'), (_req: Request, res: Response) => {
+  res.json({
+    users: getAllUsers(),
+    roles: getAllRoles(),
+  });
+});
+
+app.post('/api/users', requirePermission('users.manage'), (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const fullName = String(b.full_name ?? '').trim();
+  const email = String(b.email ?? '').trim().toLowerCase();
+  const phone = String(b.phone ?? '').trim().slice(0, 30);
+  const password = typeof b.password === 'string' ? b.password : '';
+  const roleId = Number(b.role_id ?? 0);
+  const isActive = b.is_active === false || b.is_active === 0 ? 0 : 1;
+
+  if (fullName.length < 2 || fullName.length > 100) {
+    res.status(400).json({ error: 'Full name must be between 2 and 100 characters.' });
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
+    res.status(400).json({ error: 'Valid email address is required.' });
+    return;
+  }
+  if (password.length < 6 || password.length > 128) {
+    res.status(400).json({ error: 'Password must be between 6 and 128 characters.' });
+    return;
+  }
+
+  const targetRole = getRoleById(roleId);
+  if (!targetRole) {
+    res.status(400).json({ error: 'Selected role does not exist.' });
+    return;
+  }
+
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  if (existing) {
+    res.status(409).json({ error: 'An account with this email already exists.' });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const passwordHash = hashPassword(password);
+  const info = db
+    .prepare(`
+      INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(fullName, email, phone, passwordHash, targetRole.slug, targetRole.id, isActive, now);
+
+  res.status(201).json({
+    userId: Number(info.lastInsertRowid),
+    users: getAllUsers(),
+    roles: getAllRoles(),
+  });
+});
+
+app.put('/api/users/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const authUser = res.locals.authUser as AuthUser;
+  const existing = db
+    .prepare('SELECT id, email, role, role_id, is_active FROM users WHERE id = ?')
+    .get(id) as
+    | { id: number; email: string; role: string; role_id: number | null; is_active: number }
+    | undefined;
+
+  if (!existing) {
+    res.status(404).json({ error: 'User not found.' });
+    return;
+  }
+
+  const b = req.body as Record<string, unknown>;
+  const fullName = String(b.full_name ?? '').trim();
+  const email = String(b.email ?? existing.email).trim().toLowerCase();
+  const phone = String(b.phone ?? '').trim().slice(0, 30);
+  const password = typeof b.password === 'string' ? b.password : '';
+  const roleId = Number(b.role_id ?? existing.role_id ?? 0);
+  const nextActive =
+    b.is_active === undefined ? existing.is_active : b.is_active === false || b.is_active === 0 ? 0 : 1;
+
+  if (fullName.length < 2 || fullName.length > 100) {
+    res.status(400).json({ error: 'Full name must be between 2 and 100 characters.' });
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
+    res.status(400).json({ error: 'Valid email address is required.' });
+    return;
+  }
+  if (password && (password.length < 6 || password.length > 128)) {
+    res.status(400).json({ error: 'Password must be between 6 and 128 characters.' });
+    return;
+  }
+
+  const targetRole = getRoleById(roleId);
+  if (!targetRole) {
+    res.status(400).json({ error: 'Selected role does not exist.' });
+    return;
+  }
+
+  const dupEmail = db
+    .prepare('SELECT id FROM users WHERE email = ? AND id != ?')
+    .get(email, id);
+  if (dupEmail) {
+    res.status(409).json({ error: 'Another account already uses this email.' });
+    return;
+  }
+
+  // Safeguard: cannot deactivate self or remove the last active admin
+  if (id === authUser.id && nextActive === 0) {
+    res.status(400).json({ error: 'You cannot deactivate your own active account.' });
+    return;
+  }
+
+  const existingRole = existing.role_id ? getRoleById(existing.role_id) : null;
+  const wasManagerAdmin =
+    existingRole?.permissions.includes('users.manage') || existing.role === 'admin';
+  const willKeepManagerAdmin = targetRole.permissions.includes('users.manage') && nextActive === 1;
+
+  if (wasManagerAdmin && !willKeepManagerAdmin) {
+    const adminManagers = db
+      .prepare(`
+        SELECT u.id, COALESCE(r.permissions_json, '[]') as permissions_json, u.role
+        FROM users u
+        LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.is_active = 1 AND u.id != ?
+      `)
+      .all(id) as Array<{ id: number; permissions_json: string; role: string }>;
+
+    const anotherAdminExists = adminManagers.some((u) => {
+      if (u.role === 'admin') return true;
+      try {
+        return sanitizePermissions(JSON.parse(u.permissions_json)).includes('users.manage');
+      } catch {
+        return false;
+      }
+    });
+
+    if (!anotherAdminExists) {
+      res.status(400).json({
+        error: 'Cannot demote or deactivate the last active user administrator.',
+      });
+      return;
+    }
+  }
+
+  db.prepare(`
+    UPDATE users
+    SET full_name = ?, email = ?, phone = ?, role = ?, role_id = ?, is_active = ?
+    WHERE id = ?
+  `).run(fullName, email, phone, targetRole.slug, targetRole.id, nextActive, id);
+
+  if (password) {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
+      hashPassword(password),
+      id
+    );
+  }
+
+  if (nextActive === 0 || password) {
+    revokeAllSessionsForUser(id);
+  }
+
+  res.json({
+    users: getAllUsers(),
+    roles: getAllRoles(),
+    currentUser: id === authUser.id ? resolveAuthUserById(authUser.id) : undefined,
+  });
+});
+
+app.delete('/api/users/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const authUser = res.locals.authUser as AuthUser;
+  if (id === authUser.id) {
+    res.status(400).json({ error: 'You cannot delete your own account.' });
+    return;
+  }
+
+  const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+  if (!existing) {
+    res.status(404).json({ error: 'User not found.' });
+    return;
+  }
+
+  revokeAllSessionsForUser(id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+
+  res.json({
+    users: getAllUsers(),
+    roles: getAllRoles(),
+  });
+});
+
+app.get('/api/roles', requirePermission('users.manage'), (_req: Request, res: Response) => {
+  res.json({ roles: getAllRoles() });
+});
+
+app.post('/api/roles', requirePermission('users.manage'), (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const nameAr = String(b.name_ar ?? '').trim();
+  const nameEn = String(b.name_en ?? '').trim() || nameAr;
+  const descAr = String(b.description_ar ?? '').trim();
+  const descEn = String(b.description_en ?? '').trim() || descAr;
+  const permissions = sanitizePermissions(b.permissions);
+
+  if (nameAr.length < 2 || nameAr.length > 60) {
+    res.status(400).json({ error: 'Role name must be between 2 and 60 characters.' });
+    return;
+  }
+
+  const baseSlug = nameEn
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'custom_role';
+  const slug = `${baseSlug}_${crypto.randomBytes(2).toString('hex')}`;
+  const now = new Date().toISOString();
+
+  const info = db
+    .prepare(`
+      INSERT INTO roles (
+        slug, name_ar, name_en, description_ar, description_en,
+        permissions_json, is_system, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+    `)
+    .run(slug, nameAr, nameEn, descAr, descEn, JSON.stringify(permissions), now);
+
+  res.status(201).json({
+    role: getRoleById(Number(info.lastInsertRowid)),
+    roles: getAllRoles(),
+  });
+});
+
+app.put('/api/roles/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const authUser = res.locals.authUser as AuthUser;
+  const role = getRoleById(id);
+  if (!role) {
+    res.status(404).json({ error: 'Role not found.' });
+    return;
+  }
+
+  const b = req.body as Record<string, unknown>;
+  const nameAr = String(b.name_ar ?? role.name_ar).trim();
+  const nameEn = String(b.name_en ?? role.name_en).trim() || nameAr;
+  const descAr = String(b.description_ar ?? role.description_ar).trim();
+  const descEn = String(b.description_en ?? role.description_en).trim();
+
+  if (nameAr.length < 2 || nameAr.length > 60) {
+    res.status(400).json({ error: 'Role name must be between 2 and 60 characters.' });
+    return;
+  }
+
+  const nextPermissions =
+    role.slug === 'admin'
+      ? [...ALL_PERMISSION_KEYS]
+      : b.permissions === undefined
+      ? role.permissions
+      : sanitizePermissions(b.permissions);
+
+  db.prepare(`
+    UPDATE roles
+    SET name_ar = ?, name_en = ?, description_ar = ?, description_en = ?, permissions_json = ?
+    WHERE id = ?
+  `).run(nameAr, nameEn, descAr, descEn, JSON.stringify(nextPermissions), id);
+
+  res.json({
+    role: getRoleById(id),
+    roles: getAllRoles(),
+    users: getAllUsers(),
+    currentUser: resolveAuthUserById(authUser.id),
+  });
+});
+
+app.delete('/api/roles/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const role = getRoleById(id);
+  if (!role) {
+    res.status(404).json({ error: 'Role not found.' });
+    return;
+  }
+  if (role.is_system === 1 || role.slug === 'admin') {
+    res.status(400).json({ error: 'System administrator role cannot be deleted.' });
+    return;
+  }
+  if ((role.users_count ?? 0) > 0) {
+    res.status(400).json({
+      error: 'Reassign users from this role before deleting it.',
+    });
+    return;
+  }
+
+  db.prepare('DELETE FROM roles WHERE id = ?').run(id);
+  res.json({ roles: getAllRoles() });
+});
+
+app.post('/api/vouchers', requirePermission('vouchers.manage'), (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const voucherType: VoucherType = b.voucher_type === 'payment' ? 'payment' : 'receipt';
+  const paymentChannel: VoucherChannel = b.payment_channel === 'bank' ? 'bank' : 'cash';
+  const partyName = String(b.party_name ?? '').trim();
+  const category = String(b.category ?? '').trim();
+  const notes = String(b.notes ?? '').trim();
+  const amount = Number(b.amount ?? 0);
+  const rawDate = String(b.voucher_date ?? '').trim();
+  const voucherDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+    ? rawDate
+    : new Date().toISOString().slice(0, 10);
+
+  if (!partyName) {
+    res.status(400).json({ error: 'Party or description name is required.' });
+    return;
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    res.status(400).json({ error: 'Voucher amount must be greater than zero.' });
+    return;
+  }
+
+  const prefix = voucherType === 'receipt' ? 'RCV' : 'PAY';
+  const countRow = db
+    .prepare('SELECT COUNT(*) as cnt FROM vouchers WHERE voucher_type = ?')
+    .get(voucherType) as { cnt: number };
+  const voucherNumber = `${prefix}-${new Date().getFullYear()}-${String(countRow.cnt + 1).padStart(5, '0')}`;
+  const now = new Date().toISOString();
+
+  const info = db
+    .prepare(`
+      INSERT INTO vouchers (
+        voucher_number, voucher_type, payment_channel, party_name, category,
+        amount, notes, voucher_date, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      voucherNumber,
+      voucherType,
+      paymentChannel,
+      partyName,
+      category || (voucherType === 'receipt' ? 'إيرادات أخرى' : 'مصروفات تشغيلية'),
+      Number(amount.toFixed(2)),
+      notes,
+      voucherDate,
+      now
+    );
+
+  const vouchers = getAllVouchers();
+  res.status(201).json({
+    voucher: vouchers.find((v) => v.id === Number(info.lastInsertRowid)),
+    vouchers,
+  });
+});
+
+app.delete('/api/vouchers/:id', requirePermission('vouchers.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: 'Invalid voucher ID.' });
+    return;
+  }
+  db.prepare('DELETE FROM vouchers WHERE id = ?').run(id);
+  res.json({ vouchers: getAllVouchers() });
+});
+
 // Organization, Thermal Print & ZATCA settings
-app.put('/api/settings', (req: Request, res: Response) => {
+app.put('/api/settings', requirePermission('settings.manage'), (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const current = getOrganizationSettings();
 
@@ -320,7 +714,7 @@ app.put('/api/settings', (req: Request, res: Response) => {
 });
 
 // Generate real secp256k1 ECDSA keypair + ZATCA CSR
-app.post('/api/zatca/generate-keys', (_req: Request, res: Response) => {
+app.post('/api/zatca/generate-keys', requirePermission('zatca.manage'), (_req: Request, res: Response) => {
   const org = getOrganizationSettings();
   const keys = generateEgsKeyPair({
     name_en: org.name_en,
@@ -343,7 +737,7 @@ app.post('/api/zatca/generate-keys', (_req: Request, res: Response) => {
 });
 
 // Execute ZATCA onboarding steps (CCSID -> Compliance Check -> PCSID)
-app.post('/api/zatca/onboard', async (req: Request, res: Response) => {
+app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const action = String(body.action ?? '');
   const otp = String(body.otp ?? '').trim();
@@ -525,7 +919,7 @@ app.post('/api/zatca/onboard', async (req: Request, res: Response) => {
 });
 
 // Decode TLV Base64 QR code
-app.post('/api/zatca/decode-qr', (req: Request, res: Response) => {
+app.post('/api/zatca/decode-qr', requirePermission('zatca.manage'), (req: Request, res: Response) => {
   const qr = String((req.body as Record<string, unknown>).qr ?? '').trim();
   if (!qr) {
     res.status(400).json({ error: 'QR Base64 string is required.' });
@@ -536,7 +930,7 @@ app.post('/api/zatca/decode-qr', (req: Request, res: Response) => {
 });
 
 // Product CRUD
-app.post('/api/products', (req: Request, res: Response) => {
+app.post('/api/products', requirePermission('inventory.manage'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const sku = String(b.sku ?? '').trim();
   const nameAr = String(b.name_ar ?? '').trim();
@@ -614,7 +1008,7 @@ app.post('/api/products', (req: Request, res: Response) => {
   }
 });
 
-app.put('/api/products/:id', (req: Request, res: Response) => {
+app.put('/api/products/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Product | undefined;
   if (!existing) {
@@ -652,14 +1046,14 @@ app.put('/api/products/:id', (req: Request, res: Response) => {
   res.json({ products: getAllProducts() });
 });
 
-app.delete('/api/products/:id', (req: Request, res: Response) => {
+app.delete('/api/products/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(id);
   res.json({ products: getAllProducts() });
 });
 
 // Inventory movement (purchase / adjustment / return)
-app.post('/api/inventory/movement', (req: Request, res: Response) => {
+app.post('/api/inventory/movement', requirePermission('inventory.adjust'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const productId = Number(b.product_id);
   const type = String(b.type ?? 'purchase');
@@ -710,7 +1104,7 @@ app.post('/api/inventory/movement', (req: Request, res: Response) => {
 });
 
 // Suppliers & Purchases CRUD
-app.post('/api/suppliers', (req: Request, res: Response) => {
+app.post('/api/suppliers', requirePermission('purchases.manage'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const nameAr = String(b.name_ar ?? '').trim();
   const nameEn = String(b.name_en ?? '').trim() || nameAr;
@@ -738,7 +1132,7 @@ app.post('/api/suppliers', (req: Request, res: Response) => {
   });
 });
 
-app.put('/api/suppliers/:id', (req: Request, res: Response) => {
+app.put('/api/suppliers/:id', requirePermission('purchases.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id) as Supplier | undefined;
   if (!existing) {
@@ -765,7 +1159,7 @@ app.put('/api/suppliers/:id', (req: Request, res: Response) => {
   res.json({ suppliers: getAllSuppliers() });
 });
 
-app.post('/api/purchases', (req: Request, res: Response) => {
+app.post('/api/purchases', requirePermission('purchases.manage'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const supplierId = Number(b.supplier_id);
   const supplierInvoiceNo = String(b.supplier_invoice_no ?? '').trim();
@@ -931,7 +1325,7 @@ app.post('/api/purchases', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/purchases/:id/pay', (req: Request, res: Response) => {
+app.post('/api/purchases/:id/pay', requirePermission('purchases.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const purchase = db.prepare('SELECT * FROM purchases WHERE id = ?').get(id) as
     | Purchase
@@ -961,7 +1355,7 @@ app.post('/api/purchases/:id/pay', (req: Request, res: Response) => {
 });
 
 // Customers CRUD for B2B
-app.post('/api/customers', (req: Request, res: Response) => {
+app.post('/api/customers', requirePermission('customers.manage'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const nameAr = String(b.name_ar ?? '').trim();
   const nameEn = String(b.name_en ?? '').trim() || nameAr;
@@ -989,7 +1383,7 @@ app.post('/api/customers', (req: Request, res: Response) => {
   });
 });
 
-app.put('/api/customers/:id', (req: Request, res: Response) => {
+app.put('/api/customers/:id', requirePermission('customers.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id) as
     | {
@@ -1032,7 +1426,7 @@ app.put('/api/customers/:id', (req: Request, res: Response) => {
 });
 
 // Held carts
-app.post('/api/carts/hold', (req: Request, res: Response) => {
+app.post('/api/carts/hold', requirePermission('pos.hold'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const label = String(b.label ?? `طلب معلق #${Date.now().toString().slice(-4)}`).trim();
   const itemsJson = JSON.stringify(Array.isArray(b.items) ? b.items : []);
@@ -1049,14 +1443,15 @@ app.post('/api/carts/hold', (req: Request, res: Response) => {
   res.status(201).json({ heldCarts: getHeldCarts() });
 });
 
-app.delete('/api/carts/hold/:id', (req: Request, res: Response) => {
+app.delete('/api/carts/hold/:id', requirePermission('pos.hold'), (req: Request, res: Response) => {
   db.prepare('DELETE FROM held_carts WHERE id = ?').run(Number(req.params.id));
   res.json({ heldCarts: getHeldCarts() });
 });
 
 // Atomic POS Checkout -> Deduct Inventory + Generate UBL 2.1 XML + Sign + TLV QR + ZATCA Dispatch
-app.post('/api/invoices', async (req: Request, res: Response) => {
+app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
+  const authUser = res.locals.authUser as AuthUser;
   const rawItems = Array.isArray(b.items) ? (b.items as Array<Record<string, unknown>>) : [];
   const invoiceSubtype: InvoiceSubtype =
     b.invoice_subtype === '0100000' ? '0100000' : '0200000';
@@ -1070,6 +1465,11 @@ app.post('/api/invoices', async (req: Request, res: Response) => {
       : 'cash';
   const discountTotal = Math.max(0, Number(b.discount_total ?? 0));
   const customerId = b.customer_id ? Number(b.customer_id) : null;
+
+  if (discountTotal > 0 && !authUser.permissions.includes('pos.discount')) {
+    res.status(403).json({ error: 'You do not have permission to apply discounts.' });
+    return;
+  }
 
   if (rawItems.length === 0) {
     res.status(400).json({ error: 'Cart cannot be empty.' });
@@ -1333,7 +1733,7 @@ app.post('/api/invoices', async (req: Request, res: Response) => {
 });
 
 // Retry ZATCA submission for pending/rejected invoice
-app.post('/api/invoices/:id/retry', async (req: Request, res: Response) => {
+app.post('/api/invoices/:id/retry', requirePermission('zatca.manage'), async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as Invoice | undefined;
   if (!inv) {
@@ -1368,7 +1768,7 @@ app.post('/api/invoices/:id/retry', async (req: Request, res: Response) => {
 });
 
 // Issue ZATCA Credit Note (381) for an existing invoice and return items to stock
-app.post('/api/invoices/:id/credit-note', async (req: Request, res: Response) => {
+app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), async (req: Request, res: Response) => {
   const sourceId = Number(req.params.id);
   const sourceInv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(sourceId) as Invoice | undefined;
   if (!sourceInv) {
