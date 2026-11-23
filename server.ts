@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import type { Request, Response } from 'express';
 import {
@@ -1572,8 +1573,10 @@ app.post('/api/invoices/:id/credit-note', async (req: Request, res: Response) =>
 
 async function startServer(): Promise<void> {
   const port = Number(process.env.PORT) || 3000;
+  const currentFile = fileURLToPath(import.meta.url);
+  const currentDir = path.dirname(currentFile);
   const isCompiledEntry =
-    import.meta.url.endsWith('/server.js') ||
+    path.basename(currentFile) === 'server.js' ||
     path.basename(process.argv[1] || '') === 'server.js';
   const isProduction = process.env.NODE_ENV === 'production' || isCompiledEntry;
 
@@ -1585,9 +1588,19 @@ async function startServer(): Promise<void> {
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
+    const distCandidates = [
+      path.resolve(currentDir, 'dist'),
+      path.resolve(process.cwd(), 'dist'),
+    ];
+    const distDir =
+      distCandidates.find((dir) => fs.existsSync(path.join(dir, 'index.html'))) ??
+      distCandidates[0];
+
     app.use(express.static(distDir));
-    app.get('/{*splat}', (_req: Request, res: Response) => {
+    app.use('/api', (_req: Request, res: Response) => {
+      res.status(404).json({ error: 'API route not found.' });
+    });
+    app.get('*', (_req: Request, res: Response) => {
       const indexFile = path.join(distDir, 'index.html');
       if (fs.existsSync(indexFile)) {
         res.sendFile(indexFile);
