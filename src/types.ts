@@ -5,6 +5,7 @@ export type InvoiceSubtype = '0200000' | '0100000';
 export type PaymentMethod = 'cash' | 'card' | 'split';
 export type ZatcaStatus = 'REPORTED' | 'CLEARED' | 'PENDING' | 'REJECTED' | 'DISABLED';
 export type FontSizeLevel = 'small' | 'medium' | 'large';
+export type TablePageSize = 5 | 10 | 20 | 50;
 
 export interface OrganizationSettings {
   id: number;
@@ -24,6 +25,7 @@ export interface OrganizationSettings {
   thermal_width_mm: number;
   auto_print_receipt: number;
   font_size: FontSizeLevel;
+  table_page_size: number;
   ccsid_token: string;
   ccsid_secret: string;
   ccsid_request_id: string;

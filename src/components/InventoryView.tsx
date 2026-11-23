@@ -2,11 +2,13 @@ import { useMemo, useState } from 'react';
 import { ArrowDownUp, Edit3, PackagePlus, Search, X } from 'lucide-react';
 import type { Language, Product, StockMovement } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
+import { TablePagination, useTablePagination } from './TablePagination';
 
 interface InventoryViewProps {
   lang: Language;
   products: Product[];
   movements: StockMovement[];
+  pageSize?: number;
   onCreateProduct: (payload: Record<string, unknown>) => Promise<void>;
   onUpdateProduct: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onStockMovement: (payload: {
@@ -21,6 +23,7 @@ export function InventoryView({
   lang,
   products,
   movements,
+  pageSize = 10,
   onCreateProduct,
   onUpdateProduct,
   onStockMovement,
@@ -85,6 +88,13 @@ export function InventoryView({
       );
     });
   }, [products, search, stockFilter]);
+
+  const catalogPagination = useTablePagination(
+    filteredProducts,
+    pageSize,
+    `${search}|${stockFilter}`
+  );
+  const movementsPagination = useTablePagination(movements, pageSize);
 
   const openNewProductModal = () => {
     setEditingProduct(null);
@@ -285,7 +295,14 @@ export function InventoryView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filteredProducts.map((p) => {
+              {catalogPagination.pagedItems.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-10 text-center text-slate-400">
+                    {isAr ? 'لا توجد أصناف مطابقة للبحث' : 'No matching products found'}
+                  </td>
+                </tr>
+              ) : (
+                catalogPagination.pagedItems.map((p) => {
                 const priceIncl = Number((p.sell_price * (1 + p.tax_rate / 100)).toFixed(2));
                 const isOut = p.stock_qty <= 0;
                 const isLow = p.stock_qty > 0 && p.stock_qty <= p.min_stock_alert;
@@ -359,9 +376,19 @@ export function InventoryView({
                     </td>
                   </tr>
                 );
-              })}
+              })
+              )}
             </tbody>
           </table>
+          <TablePagination
+            lang={lang}
+            currentPage={catalogPagination.currentPage}
+            totalPages={catalogPagination.totalPages}
+            totalItems={catalogPagination.totalItems}
+            startItem={catalogPagination.startItem}
+            endItem={catalogPagination.endItem}
+            onPageChange={catalogPagination.setPage}
+          />
         </div>
       ) : (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
@@ -377,7 +404,7 @@ export function InventoryView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {movements.map((m) => (
+              {movementsPagination.pagedItems.map((m) => (
                 <tr key={m.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                   <td className="py-3 px-4 font-mono tabular-nums text-slate-500">
                     {formatDateTime(m.created_at, lang)}
@@ -415,6 +442,15 @@ export function InventoryView({
               ))}
             </tbody>
           </table>
+          <TablePagination
+            lang={lang}
+            currentPage={movementsPagination.currentPage}
+            totalPages={movementsPagination.totalPages}
+            totalItems={movementsPagination.totalItems}
+            startItem={movementsPagination.startItem}
+            endItem={movementsPagination.endItem}
+            onPageChange={movementsPagination.setPage}
+          />
         </div>
       )}
 

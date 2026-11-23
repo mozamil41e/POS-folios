@@ -11,6 +11,7 @@ import {
 import type { FontSizeLevel, Invoice, Language, OrganizationSettings } from '../types';
 import { formatDateTime, formatMoney } from '../i18n';
 import { buildPublicInvoiceUrl } from './InvoiceReceiptModal';
+import { TablePagination, useTablePagination } from './TablePagination';
 
 interface InvoicesSettingsViewProps {
   lang: Language;
@@ -50,6 +51,7 @@ export function InvoicesSettingsView({
     auto_print_receipt: settings.auto_print_receipt === 1,
     zatca_enabled: settings.zatca_enabled === 1,
     font_size: (settings.font_size || 'medium') as FontSizeLevel,
+    table_page_size: settings.table_page_size || 10,
   });
 
   useEffect(() => {
@@ -65,6 +67,7 @@ export function InvoicesSettingsView({
       auto_print_receipt: settings.auto_print_receipt === 1,
       zatca_enabled: settings.zatca_enabled === 1,
       font_size: (settings.font_size || 'medium') as FontSizeLevel,
+      table_page_size: settings.table_page_size || 10,
     });
   }, [settings]);
 
@@ -96,6 +99,12 @@ export function InvoicesSettingsView({
     );
   }, [invoices, search]);
 
+  const invoicesPagination = useTablePagination(
+    filteredInvoices,
+    settings.table_page_size || 10,
+    search
+  );
+
   const effectiveBaseUrl =
     form.public_base_url.trim().replace(/\/+$/, '') || window.location.origin;
 
@@ -123,6 +132,7 @@ export function InvoicesSettingsView({
         auto_print_receipt: form.auto_print_receipt ? 1 : 0,
         zatca_enabled: form.zatca_enabled ? 1 : 0,
         font_size: form.font_size,
+        table_page_size: form.table_page_size,
       });
     } finally {
       setSaving(false);
@@ -261,7 +271,14 @@ export function InvoicesSettingsView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredInvoices.map((inv) => {
+                {invoicesPagination.pagedItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-10 text-center text-slate-400">
+                      {isAr ? 'لا توجد فواتير مطابقة للبحث' : 'No matching invoices found'}
+                    </td>
+                  </tr>
+                ) : (
+                  invoicesPagination.pagedItems.map((inv) => {
                   const isCredit = inv.invoice_type_code === '381';
                   const payLabel =
                     inv.payment_method === 'card'
@@ -348,9 +365,19 @@ export function InvoicesSettingsView({
                       </td>
                     </tr>
                   );
-                })}
+                })
+                )}
               </tbody>
             </table>
+            <TablePagination
+              lang={lang}
+              currentPage={invoicesPagination.currentPage}
+              totalPages={invoicesPagination.totalPages}
+              totalItems={invoicesPagination.totalItems}
+              startItem={invoicesPagination.startItem}
+              endItem={invoicesPagination.endItem}
+              onPageChange={invoicesPagination.setPage}
+            />
           </div>
         </>
       ) : (
@@ -472,7 +499,36 @@ export function InvoicesSettingsView({
                 </div>
               </div>
 
-              <div className="sm:col-span-2 space-y-1.5">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  {isAr ? 'حجم صفحات الجداول (Pagination)' : 'Table Pagination Size'}
+                </label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[5, 10, 20, 50].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({ ...prev, table_page_size: size }))
+                      }
+                      className={`py-2 px-2 text-xs font-mono font-semibold rounded-lg border transition-colors ${
+                        form.table_page_size === size
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {isAr
+                    ? 'عدد الصفوف المعروضة في كل صفحة لجميع جداول النظام'
+                    : 'Rows displayed per page across all system tables'}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {isAr ? 'الطباعة التلقائية عند البيع' : 'Auto-Print on Checkout'}
                 </label>

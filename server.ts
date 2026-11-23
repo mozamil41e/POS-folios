@@ -260,6 +260,14 @@ app.put('/api/settings', (req: Request, res: Response) => {
       : current.font_size === 'small' || current.font_size === 'large'
       ? current.font_size
       : 'medium';
+  const rawPageSize = Number(body.table_page_size);
+  const allowedPageSizes = [5, 10, 20, 50];
+  const tablePageSize =
+    body.table_page_size === undefined
+      ? current.table_page_size || 10
+      : allowedPageSizes.includes(rawPageSize)
+      ? rawPageSize
+      : 10;
 
   let publicBaseUrl =
     body.public_base_url === undefined
@@ -290,7 +298,7 @@ app.put('/api/settings', (req: Request, res: Response) => {
     SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?,
         street_ar = ?, building_no = ?, city_ar = ?, postal_code = ?,
         egs_serial = ?, mode = ?, zatca_enabled = ?, public_base_url = ?,
-        thermal_width_mm = ?, auto_print_receipt = ?, font_size = ?
+        thermal_width_mm = ?, auto_print_receipt = ?, font_size = ?, table_page_size = ?
     WHERE id = 1
   `).run(
     nameAr,
@@ -307,7 +315,8 @@ app.put('/api/settings', (req: Request, res: Response) => {
     publicBaseUrl,
     thermalWidthMm,
     autoPrintReceipt,
-    fontSize
+    fontSize,
+    tablePageSize
   );
 
   res.json({ settings: getOrganizationSettings() });
@@ -983,6 +992,48 @@ app.post('/api/customers', (req: Request, res: Response) => {
   });
 });
 
+app.put('/api/customers/:id', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id) as
+    | {
+        id: number;
+        name_ar: string;
+        name_en: string;
+        vat_number: string;
+        cr_number: string;
+        address_ar: string;
+        phone: string;
+      }
+    | undefined;
+  if (!existing) {
+    res.status(404).json({ error: 'Customer not found.' });
+    return;
+  }
+
+  const b = req.body as Record<string, unknown>;
+  const nameAr = String(b.name_ar ?? existing.name_ar).trim();
+  if (!nameAr) {
+    res.status(400).json({ error: 'Customer name is required.' });
+    return;
+  }
+
+  db.prepare(`
+    UPDATE customers
+    SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?, address_ar = ?, phone = ?
+    WHERE id = ?
+  `).run(
+    nameAr,
+    String(b.name_en ?? existing.name_en).trim() || nameAr,
+    String(b.vat_number ?? existing.vat_number).trim(),
+    String(b.cr_number ?? existing.cr_number).trim(),
+    String(b.address_ar ?? existing.address_ar).trim(),
+    String(b.phone ?? existing.phone).trim(),
+    id
+  );
+
+  res.json({ customers: getAllCustomers() });
+});
+
 // Held carts
 app.post('/api/carts/hold', (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
@@ -1325,6 +1376,21 @@ app.post('/api/invoices/:id/credit-note', async (req: Request, res: Response) =>
   const sourceInv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(sourceId) as Invoice | undefined;
   if (!sourceInv) {
     res.status(404).json({ error: 'Original invoice not found.' });
+    return;
+  }
+  if (sourceInv.invoice_type_code !== '388') {
+    res.status(400).json({ error: 'Credit note can only be issued for a sales invoice.' });
+    return;
+  }
+  const existingCreditNote = db
+    .prepare(
+      "SELECT invoice_number FROM invoices WHERE invoice_type_code = '381' AND related_invoice_number = ?"
+    )
+    .get(sourceInv.invoice_number) as { invoice_number: string } | undefined;
+  if (existingCreditNote) {
+    res.status(400).json({
+      error: `Invoice already returned via ${existingCreditNote.invoice_number}.`,
+    });
     return;
   }
 

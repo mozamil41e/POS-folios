@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Barcode,
   CreditCard,
+  Maximize2,
+  Minimize2,
   Minus,
   PauseCircle,
   Plus,
@@ -57,6 +59,8 @@ interface PosTerminalViewProps {
   }) => Promise<number>;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
   zatcaEnabled?: boolean;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 export function PosTerminalView({
@@ -70,6 +74,8 @@ export function PosTerminalView({
   onCreateCustomer,
   onNotify,
   zatcaEnabled = false,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: PosTerminalViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
@@ -98,17 +104,26 @@ export function PosTerminalView({
     phone: '',
   });
 
-  // Keyboard shortcut F2 to focus barcode input
+  // Keyboard shortcut F2 to focus barcode input, Escape to exit sell-only fullscreen
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F2') {
         e.preventDefault();
         barcodeRef.current?.focus();
+      } else if (e.key === 'Escape' && isFullscreen && onToggleFullscreen) {
+        if (showNewCustomer) {
+          setShowNewCustomer(false);
+        } else if (showHeldDrawer) {
+          setShowHeldDrawer(false);
+        } else {
+          e.preventDefault();
+          onToggleFullscreen();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [isFullscreen, onToggleFullscreen, showNewCustomer, showHeldDrawer]);
 
   const categories = useMemo(() => {
     const map = new Map<string, { ar: string; en: string }>();
@@ -363,6 +378,39 @@ export function PosTerminalView({
                 className="w-full ps-9 pe-3 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:border-emerald-700"
               />
             </div>
+
+            {onToggleFullscreen && (
+              <button
+                type="button"
+                onClick={onToggleFullscreen}
+                title={
+                  isFullscreen
+                    ? isAr
+                      ? 'إظهار القوائم والهيدر (Esc)'
+                      : 'Show navigation & header (Esc)'
+                    : isAr
+                    ? 'تكبير شاشة البيع وإخفاء كافة القوائم'
+                    : 'Sell-only fullscreen mode'
+                }
+                className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  isFullscreen
+                    ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900 dark:border-white hover:opacity-90'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 dark:hover:border-emerald-800'
+                }`}
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 className="w-4 h-4 shrink-0" />
+                    <span>{isAr ? 'إظهار القوائم' : 'Exit Fullscreen'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-4 h-4 shrink-0" />
+                    <span>{isAr ? 'شاشة البيع فقط' : 'Sell Fullscreen'}</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Category Filter Tabs */}
@@ -464,7 +512,11 @@ export function PosTerminalView({
       </div>
 
       {/* Checkout & Cart Sidebar */}
-      <div className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-4 lg:sticky lg:top-20">
+      <div
+        className={`lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-4 lg:sticky ${
+          isFullscreen ? 'lg:top-3' : 'lg:top-20'
+        }`}
+      >
         {/* Cart Header */}
         <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-2">

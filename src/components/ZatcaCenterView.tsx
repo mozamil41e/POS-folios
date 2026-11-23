@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type {
   DecodedTlvTag,
+  FontSizeLevel,
   Invoice,
   Language,
   OrganizationSettings,
@@ -19,6 +20,7 @@ import type {
 } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
 import { QrCodeCanvas } from './QrCodeCanvas';
+import { TablePagination, useTablePagination } from './TablePagination';
 
 interface ZatcaCenterViewProps {
   lang: Language;
@@ -66,7 +68,14 @@ export function ZatcaCenterView({
     postal_code: settings.postal_code,
     egs_serial: settings.egs_serial,
     mode: settings.mode as ZatcaMode,
+    font_size: (settings.font_size || 'medium') as FontSizeLevel,
+    table_page_size: settings.table_page_size || 10,
   });
+
+  const invoicesPagination = useTablePagination(
+    invoices,
+    settings.table_page_size || 10
+  );
 
   useEffect(() => {
     setOrgForm({
@@ -80,6 +89,8 @@ export function ZatcaCenterView({
       postal_code: settings.postal_code,
       egs_serial: settings.egs_serial,
       mode: settings.mode,
+      font_size: (settings.font_size || 'medium') as FontSizeLevel,
+      table_page_size: settings.table_page_size || 10,
     });
   }, [settings]);
 
@@ -225,7 +236,7 @@ export function ZatcaCenterView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {invoices.map((inv) => {
+                {invoicesPagination.pagedItems.map((inv) => {
                   const isSelected = selectedInvoice?.id === inv.id;
                   const statusColor =
                     inv.zatca_status === 'CLEARED' || inv.zatca_status === 'REPORTED'
@@ -303,6 +314,15 @@ export function ZatcaCenterView({
                 })}
               </tbody>
             </table>
+            <TablePagination
+              lang={lang}
+              currentPage={invoicesPagination.currentPage}
+              totalPages={invoicesPagination.totalPages}
+              totalItems={invoicesPagination.totalItems}
+              startItem={invoicesPagination.startItem}
+              endItem={invoicesPagination.endItem}
+              onPageChange={invoicesPagination.setPage}
+            />
           </div>
 
           {/* Inspector Column */}
@@ -497,6 +517,61 @@ export function ZatcaCenterView({
                   onChange={(e) => setOrgForm({ ...orgForm, egs_serial: e.target.value })}
                   className="w-full font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
                 />
+              </div>
+
+              <div>
+                <label className="block text-slate-500 mb-1">
+                  {isAr ? 'حجم الخط' : 'Font Size'}
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(
+                    [
+                      ['large', isAr ? 'كبير' : 'Large'],
+                      ['medium', isAr ? 'متوسط' : 'Medium'],
+                      ['small', isAr ? 'صغير' : 'Small'],
+                    ] as Array<[FontSizeLevel, string]>
+                  ).map(([level, label]) => (
+                    <button
+                      key={level}
+                      type="button"
+                      onClick={() => {
+                        document.documentElement.dataset.fontSize = level;
+                        setOrgForm((prev) => ({ ...prev, font_size: level }));
+                      }}
+                      className={`py-2 px-2 text-xs font-semibold rounded-lg border transition-colors ${
+                        orgForm.font_size === level
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-500 mb-1">
+                  {isAr ? 'حجم صفحات الجداول (Pagination)' : 'Table Pagination Size'}
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[5, 10, 20, 50].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() =>
+                        setOrgForm((prev) => ({ ...prev, table_page_size: size }))
+                      }
+                      className={`py-2 px-2 text-xs font-mono font-semibold rounded-lg border transition-colors ${
+                        orgForm.table_page_size === size
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

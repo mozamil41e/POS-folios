@@ -4,6 +4,7 @@ export const translations = {
   ar: {
     brand: 'ميزان POS',
     navPos: 'نقطة البيع',
+    navSales: 'المبيعات',
     navInventory: 'المخزون',
     navPurchases: 'المشتريات',
     navInvoices: 'الفواتير والإعدادات',
@@ -117,10 +118,25 @@ export const translations = {
     creditLabel: 'آجل',
     partialLabel: 'جزئي',
     settlePayment: 'تسديد دفعة',
+
+    // Sales
+    salesTitle: 'إدارة المبيعات والعملاء',
+    salesSubtitle: 'متابعة فواتير المبيعات، المرتجعات، هوامش الربح، وتحليلات الأصناف والعملاء',
+    newSaleBtn: '+ فاتورة مبيعات',
+    newCustomerBtn: '+ إضافة عميل',
+    exportCsvBtn: 'تصدير CSV',
+    salesLedgerTab: 'سجل المبيعات والفواتير',
+    salesAnalyticsTab: 'الأرباح والأكثر مبيعاً',
+    customersTab: 'دليل العملاء',
+    netSalesMetric: 'صافي المبيعات',
+    grossProfitMetric: 'الربح التقديري',
+    cashVsCardMetric: 'نقدي مقابل مدى',
+    netOutputVatMetric: 'صافي ضريبة المخرجات',
   },
   en: {
     brand: 'Mizan POS',
     navPos: 'POS Terminal',
+    navSales: 'Sales',
     navInventory: 'Inventory',
     navPurchases: 'Purchases',
     navInvoices: 'Invoices & Print',
@@ -234,6 +250,20 @@ export const translations = {
     creditLabel: 'Credit',
     partialLabel: 'Partial',
     settlePayment: 'Record Payment',
+
+    // Sales
+    salesTitle: 'Sales & Customers Management',
+    salesSubtitle: 'Track sales invoices, returns, gross profit margins, top products, and B2B/B2C customers',
+    newSaleBtn: '+ New Sale Invoice',
+    newCustomerBtn: '+ Add Customer',
+    exportCsvBtn: 'Export CSV',
+    salesLedgerTab: 'Sales Ledger',
+    salesAnalyticsTab: 'Profit & Top Items',
+    customersTab: 'Customers Directory',
+    netSalesMetric: 'Net Sales',
+    grossProfitMetric: 'Gross Profit',
+    cashVsCardMetric: 'Cash vs Card',
+    netOutputVatMetric: 'Net Output VAT',
   },
 } as const;
 

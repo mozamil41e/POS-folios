@@ -1069,20 +1069,75 @@ class PurchaseManager extends Component
 `,
     },
     {
+      path: 'app/Livewire/SalesManager.php',
+      language: 'php',
+      category: 'livewire',
+      description_ar: 'مكون Livewire 3 لإدارة سجل المبيعات والمرتجعات وقاعدة بيانات العملاء وتحليلات الأرباح',
+      description_en: 'Livewire 3 Sales & Customers component with ledger filtering, returns, and margin analytics',
+      content: `<?php
+
+namespace App\\Livewire;
+
+use App\\Models\\Invoice;
+use Illuminate\\Support\\Facades\\DB;
+use Livewire\\Component;
+
+class SalesManager extends Component
+{
+    public string $search = '';
+    public string $paymentFilter = 'all';
+    public string $typeFilter = 'all';
+
+    public function render()
+    {
+        $query = Invoice::query()->with('items')->latest();
+
+        if ($this->search !== '') {
+            $term = '%' . $this->search . '%';
+            $query->where(function ($q) use ($term) {
+                $q->where('invoice_number', 'like', $term)
+                  ->orWhere('customer_name', 'like', $term);
+            });
+        }
+
+        if ($this->paymentFilter !== 'all') {
+            $query->where('payment_method', $this->paymentFilter);
+        }
+
+        if ($this->typeFilter !== 'all') {
+            $query->where('invoice_type_code', $this->typeFilter);
+        }
+
+        $invoices = $query->limit(100)->get();
+        $grossSales = (float) Invoice::where('invoice_type_code', '388')->sum('grand_total');
+        $returnsTotal = (float) Invoice::where('invoice_type_code', '381')->sum('grand_total');
+
+        return view('livewire.sales-manager', [
+            'invoices' => $invoices,
+            'netSales' => round($grossSales - $returnsTotal, 2),
+            'customers' => DB::table('customers')->orderByDesc('id')->get(),
+        ]);
+    }
+}
+`,
+    },
+    {
       path: 'routes/web.php',
       language: 'php',
       category: 'config',
       description_ar: 'مسارات الويب لمكونات Livewire الرئيسية في النظام',
-      description_en: 'Laravel web routes binding POS, Inventory, Purchases, and ZATCA Onboarding components',
+      description_en: 'Laravel web routes binding POS, Sales, Inventory, Purchases, and ZATCA Onboarding components',
       content: `<?php
 
 use App\\Livewire\\InventoryManager;
 use App\\Livewire\\PosTerminal;
 use App\\Livewire\\PurchaseManager;
+use App\\Livewire\\SalesManager;
 use App\\Livewire\\ZatcaOnboarding;
 use Illuminate\\Support\\Facades\\Route;
 
 Route::get('/', PosTerminal::class)->name('pos.terminal');
+Route::get('/sales', SalesManager::class)->name('sales.index');
 Route::get('/inventory', InventoryManager::class)->name('inventory.index');
 Route::get('/purchases', PurchaseManager::class)->name('purchases.index');
 Route::get('/zatca-onboarding', ZatcaOnboarding::class)->name('zatca.onboarding');

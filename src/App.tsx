@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, LogOut, Moon, Sun, User } from 'lucide-react';
 import type {
   AuthUser,
@@ -14,6 +14,7 @@ import type {
 import { translations } from './i18n';
 import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
+import { SalesView } from './components/SalesView';
 import { InventoryView } from './components/InventoryView';
 import { PurchasesView } from './components/PurchasesView';
 import { InvoicesSettingsView } from './components/InvoicesSettingsView';
@@ -22,7 +23,7 @@ import { LaravelExporterView } from './components/LaravelExporterView';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 import { PublicInvoicePage } from './components/PublicInvoicePage';
 
-type ActiveSection = 'pos' | 'inventory' | 'purchases' | 'invoices' | 'zatca' | 'laravel';
+type ActiveSection = 'pos' | 'sales' | 'inventory' | 'purchases' | 'invoices' | 'zatca' | 'laravel';
 
 interface ToastMessage {
   id: number;
@@ -115,10 +116,64 @@ function PosWorkspace({
   const [receiptInvoice, setReceiptInvoice] = useState<Invoice | null>(null);
   const [autoPrintModal, setAutoPrintModal] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [posFullscreen, setPosFullscreen] = useState(false);
+  const nativeFullscreenEnteredRef = useRef(false);
 
   const t = translations[lang];
   const isAr = lang === 'ar';
   const zatcaEnabled = data?.settings.zatca_enabled === 1;
+  const isSellOnlyFullscreen = section === 'pos' && posFullscreen;
+
+  const togglePosFullscreen = useCallback(() => {
+    const next = !posFullscreen;
+    setPosFullscreen(next);
+    if (next) {
+      try {
+        const req = document.documentElement.requestFullscreen?.();
+        if (req && typeof req.then === 'function') {
+          req
+            .then(() => {
+              nativeFullscreenEnteredRef.current = true;
+            })
+            .catch(() => {
+              nativeFullscreenEnteredRef.current = false;
+            });
+        }
+      } catch {
+        nativeFullscreenEnteredRef.current = false;
+      }
+    } else {
+      nativeFullscreenEnteredRef.current = false;
+      try {
+        if (document.fullscreenElement) {
+          void document.exitFullscreen?.();
+        }
+      } catch {
+        // Ignore browser fullscreen exit errors
+      }
+    }
+  }, [posFullscreen]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (nativeFullscreenEnteredRef.current && !document.fullscreenElement) {
+        nativeFullscreenEnteredRef.current = false;
+        setPosFullscreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      if (nativeFullscreenEnteredRef.current && document.fullscreenElement) {
+        nativeFullscreenEnteredRef.current = false;
+        try {
+          void document.exitFullscreen?.();
+        } catch {
+          // Ignore browser fullscreen exit errors
+        }
+      }
+    };
+  }, []);
 
   const notify = useCallback((text: string, tone: 'success' | 'error' = 'success') => {
     const id = Date.now();
@@ -290,6 +345,36 @@ function PosWorkspace({
       return body.customerId;
     }
     return 0;
+  };
+
+  const handleUpdateCustomer = async (
+    id: number,
+    payload: {
+      name_ar: string;
+      name_en: string;
+      vat_number: string;
+      cr_number: string;
+      address_ar: string;
+      phone: string;
+    }
+  ) => {
+    const res = await apiFetch(`/api/customers/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as {
+      error?: string;
+      customers?: BootstrapPayload['customers'];
+    };
+    if (!res.ok) {
+      notify(body.error || 'Failed to update customer', 'error');
+      return;
+    }
+    if (body.customers) {
+      setData((prev) => (prev ? { ...prev, customers: body.customers! } : prev));
+    }
+    notify(isAr ? 'تم تحديث بيانات العميل' : 'Customer updated');
   };
 
   const handleCreateProduct = async (payload: Record<string, unknown>) => {
@@ -555,63 +640,72 @@ function PosWorkspace({
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Strict 3-Zone Top Bar */}
-      <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
-          {/* Zone 1: Single-line Wordmark */}
-          <a
-            href="#pos"
-            onClick={(e) => {
-              e.preventDefault();
-              setSection('pos');
-            }}
-            className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
-          >
-            {t.brand}
-          </a>
-
-          {/* Zone 2: 5 single-line Navigation Links */}
-          <nav className="flex items-center gap-5 sm:gap-7 text-sm font-medium overflow-x-auto">
-            {(
-              [
-                ['pos', t.navPos],
-                ['inventory', t.navInventory],
-                ['purchases', t.navPurchases],
-                zatcaEnabled ? ['zatca', t.navZatca] : ['invoices', t.navInvoices],
-                ['laravel', t.navLaravel],
-              ] as Array<[ActiveSection, string]>
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setSection(key)}
-                className={`py-1.5 border-b-2 transition-colors whitespace-nowrap shrink-0 ${
-                  section === key
-                    ? 'border-emerald-700 text-emerald-800 dark:border-emerald-400 dark:text-emerald-300 font-semibold'
-                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-
-          {/* Zone 3: 1 Primary Action */}
-          <div className="shrink-0 hidden sm:block">
-            <button
-              type="button"
-              onClick={() => void handleDownloadLaravelZip()}
-              className="inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+      {!isSellOnlyFullscreen && (
+        <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs border-b border-slate-200 dark:border-slate-800">
+          <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
+            {/* Zone 1: Single-line Wordmark */}
+            <a
+              href="#pos"
+              onClick={(e) => {
+                e.preventDefault();
+                setSection('pos');
+              }}
+              className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
             >
-              {t.downloadLaravel}
-            </button>
+              {t.brand}
+            </a>
+
+            {/* Zone 2: 5 single-line Navigation Links */}
+            <nav className="flex items-center gap-4 sm:gap-6 text-sm font-medium overflow-x-auto">
+              {(
+                [
+                  ['pos', t.navPos],
+                  ['sales', t.navSales],
+                  ['inventory', t.navInventory],
+                  ['purchases', t.navPurchases],
+                  zatcaEnabled ? ['zatca', t.navZatca] : ['invoices', t.navInvoices],
+                  ['laravel', t.navLaravel],
+                ] as Array<[ActiveSection, string]>
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSection(key)}
+                  className={`py-1.5 border-b-2 transition-colors whitespace-nowrap shrink-0 ${
+                    section === key
+                      ? 'border-emerald-700 text-emerald-800 dark:border-emerald-400 dark:text-emerald-300 font-semibold'
+                      : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
+
+            {/* Zone 3: 1 Primary Action */}
+            <div className="shrink-0 hidden sm:block">
+              <button
+                type="button"
+                onClick={() => void handleDownloadLaravelZip()}
+                className="inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              >
+                {t.downloadLaravel}
+              </button>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       {/* Main Content */}
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-5 space-y-5">
+      <main
+        className={
+          isSellOnlyFullscreen
+            ? 'flex-1 w-full mx-auto px-3 sm:px-5 py-3 space-y-4'
+            : 'flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-5 space-y-5'
+        }
+      >
         {/* Workspace Toolbar (Secondary Controls & Store Metadata) */}
-        {data && (
+        {data && !isSellOnlyFullscreen && (
           <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800 text-xs">
             <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-400">
               <span className="font-semibold text-slate-900 dark:text-slate-100">
@@ -699,10 +793,31 @@ function PosWorkspace({
                 customers={data.customers}
                 heldCarts={data.heldCarts}
                 zatcaEnabled={zatcaEnabled}
+                isFullscreen={isSellOnlyFullscreen}
+                onToggleFullscreen={togglePosFullscreen}
                 onCheckout={handleCheckout}
                 onHoldCart={handleHoldCart}
                 onDeleteHeldCart={handleDeleteHeldCart}
                 onCreateCustomer={handleCreateCustomer}
+                onNotify={notify}
+              />
+            )}
+
+            {section === 'sales' && (
+              <SalesView
+                lang={lang}
+                settings={data.settings}
+                products={data.products}
+                customers={data.customers}
+                invoices={data.invoices}
+                onCreateSale={handleCheckout}
+                onCreditNote={handleCreditNote}
+                onCreateCustomer={handleCreateCustomer}
+                onUpdateCustomer={handleUpdateCustomer}
+                onOpenReceipt={(inv) => {
+                  setAutoPrintModal(false);
+                  setReceiptInvoice(inv);
+                }}
                 onNotify={notify}
               />
             )}
@@ -712,6 +827,7 @@ function PosWorkspace({
                 lang={lang}
                 products={data.products}
                 movements={data.movements}
+                pageSize={data.settings.table_page_size || 10}
                 onCreateProduct={handleCreateProduct}
                 onUpdateProduct={handleUpdateProduct}
                 onStockMovement={handleStockMovement}
@@ -724,6 +840,7 @@ function PosWorkspace({
                 products={data.products}
                 suppliers={data.suppliers}
                 purchases={data.purchases}
+                pageSize={data.settings.table_page_size || 10}
                 onCreatePurchase={handleCreatePurchase}
                 onPayPurchase={handlePayPurchase}
                 onCreateSupplier={handleCreateSupplier}

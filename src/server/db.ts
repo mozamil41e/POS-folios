@@ -53,6 +53,7 @@ export function initDatabase(): void {
       thermal_width_mm INTEGER NOT NULL DEFAULT 80,
       auto_print_receipt INTEGER NOT NULL DEFAULT 0,
       font_size TEXT NOT NULL DEFAULT 'medium',
+      table_page_size INTEGER NOT NULL DEFAULT 10,
       ccsid_token TEXT NOT NULL DEFAULT '',
       ccsid_secret TEXT NOT NULL DEFAULT '',
       ccsid_request_id TEXT NOT NULL DEFAULT '',
@@ -252,6 +253,9 @@ export function initDatabase(): void {
   if (!colNames.has('font_size')) {
     db.exec("ALTER TABLE organization_settings ADD COLUMN font_size TEXT NOT NULL DEFAULT 'medium'");
   }
+  if (!colNames.has('table_page_size')) {
+    db.exec('ALTER TABLE organization_settings ADD COLUMN table_page_size INTEGER NOT NULL DEFAULT 10');
+  }
 
   const existingOrg = db
     .prepare('SELECT id FROM organization_settings WHERE id = 1')
@@ -270,14 +274,14 @@ export function initDatabase(): void {
       INSERT INTO organization_settings (
         id, name_ar, name_en, vat_number, cr_number, street_ar, building_no,
         city_ar, postal_code, country_code, egs_serial, mode,
-        zatca_enabled, public_base_url, thermal_width_mm, auto_print_receipt, font_size,
+        zatca_enabled, public_base_url, thermal_width_mm, auto_print_receipt, font_size, table_page_size,
         ccsid_token, ccsid_secret, ccsid_request_id,
         pcsid_token, pcsid_secret,
         private_key_pem, public_key_base64, csr_pem,
         onboarding_step, last_icv, last_pih
       ) VALUES (
         1, ?, ?, ?, ?, ?, ?, ?, ?, 'SA', ?, 'simulator',
-        0, '', 80, 0, 'medium',
+        0, '', 80, 0, 'medium', 10,
         'CCSID-DEMO-884102', 'sec-demo-ccsid', '100049218',
         'PCSID-MZN-994120', 'sec-demo-pcsid',
         ?, ?, ?, 4, 0, ?

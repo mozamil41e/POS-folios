@@ -17,12 +17,14 @@ import type {
   Supplier,
 } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
+import { TablePagination, useTablePagination } from './TablePagination';
 
 interface PurchasesViewProps {
   lang: Language;
   products: Product[];
   suppliers: Supplier[];
   purchases: Purchase[];
+  pageSize?: number;
   onCreatePurchase: (payload: {
     supplier_id: number;
     supplier_invoice_no: string;
@@ -59,6 +61,7 @@ export function PurchasesView({
   products,
   suppliers,
   purchases,
+  pageSize = 10,
   onCreatePurchase,
   onPayPurchase,
   onCreateSupplier,
@@ -124,6 +127,13 @@ export function PurchasesView({
       );
     });
   }, [purchases, search, statusFilter]);
+
+  const purchasesPagination = useTablePagination(
+    filteredPurchases,
+    pageSize,
+    `${search}|${statusFilter}`
+  );
+  const suppliersPagination = useTablePagination(suppliers, pageSize);
 
   const draftTotals = useMemo(() => {
     const subtotal = draftLines.reduce((s, l) => s + l.qty * l.unit_cost, 0);
@@ -388,14 +398,14 @@ export function PurchasesView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filteredPurchases.length === 0 ? (
+              {purchasesPagination.pagedItems.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-10 text-center text-slate-400">
                     {isAr ? 'لا توجد فواتير مشتريات مطابقة' : 'No matching purchase invoices'}
                   </td>
                 </tr>
               ) : (
-                filteredPurchases.map((po) => {
+                purchasesPagination.pagedItems.map((po) => {
                   const due = Math.max(0, Number((po.grand_total - po.paid_amount).toFixed(2)));
                   return (
                     <tr
@@ -468,6 +478,15 @@ export function PurchasesView({
               )}
             </tbody>
           </table>
+          <TablePagination
+            lang={lang}
+            currentPage={purchasesPagination.currentPage}
+            totalPages={purchasesPagination.totalPages}
+            totalItems={purchasesPagination.totalItems}
+            startItem={purchasesPagination.startItem}
+            endItem={purchasesPagination.endItem}
+            onPageChange={purchasesPagination.setPage}
+          />
         </div>
       ) : (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
@@ -483,7 +502,7 @@ export function PurchasesView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {suppliers.map((s) => {
+              {suppliersPagination.pagedItems.map((s) => {
                 const supplied = purchases
                   .filter((p) => p.supplier_id === s.id)
                   .reduce((sum, p) => sum + p.grand_total, 0);
@@ -509,6 +528,15 @@ export function PurchasesView({
               })}
             </tbody>
           </table>
+          <TablePagination
+            lang={lang}
+            currentPage={suppliersPagination.currentPage}
+            totalPages={suppliersPagination.totalPages}
+            totalItems={suppliersPagination.totalItems}
+            startItem={suppliersPagination.startItem}
+            endItem={suppliersPagination.endItem}
+            onPageChange={suppliersPagination.setPage}
+          />
         </div>
       )}
 
