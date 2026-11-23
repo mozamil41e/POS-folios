@@ -19,11 +19,10 @@ import { InventoryView } from './components/InventoryView';
 import { PurchasesView } from './components/PurchasesView';
 import { InvoicesSettingsView } from './components/InvoicesSettingsView';
 import { ZatcaCenterView } from './components/ZatcaCenterView';
-import { LaravelExporterView } from './components/LaravelExporterView';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 import { PublicInvoicePage } from './components/PublicInvoicePage';
 
-type ActiveSection = 'pos' | 'sales' | 'inventory' | 'purchases' | 'invoices' | 'zatca' | 'laravel';
+type ActiveSection = 'pos' | 'sales' | 'inventory' | 'purchases' | 'invoices' | 'zatca';
 
 interface ToastMessage {
   id: number;
@@ -202,21 +201,6 @@ function PosWorkspace({
     } finally {
       onSessionExpired();
     }
-  };
-
-  const handleDownloadLaravelZip = async () => {
-    const res = await apiFetch('/api/laravel-export');
-    if (!res.ok) {
-      notify(isAr ? 'تعذر تحميل حزمة Laravel' : 'Failed to download Laravel ZIP', 'error');
-      return;
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'mizan-laravel-livewire-zatca.zip';
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   useEffect(() => {
@@ -664,7 +648,6 @@ function PosWorkspace({
                   ['inventory', t.navInventory],
                   ['purchases', t.navPurchases],
                   zatcaEnabled ? ['zatca', t.navZatca] : ['invoices', t.navInvoices],
-                  ['laravel', t.navLaravel],
                 ] as Array<[ActiveSection, string]>
               ).map(([key, label]) => (
                 <button
@@ -686,10 +669,20 @@ function PosWorkspace({
             <div className="shrink-0 hidden sm:block">
               <button
                 type="button"
-                onClick={() => void handleDownloadLaravelZip()}
+                onClick={() => {
+                  if (section !== 'pos') {
+                    setSection('pos');
+                  } else {
+                    togglePosFullscreen();
+                  }
+                }}
                 className="inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
-                {t.downloadLaravel}
+                {section !== 'pos'
+                  ? t.navPos
+                  : isAr
+                  ? 'شاشة البيع فقط'
+                  : 'Sell Fullscreen'}
               </button>
             </div>
           </div>
@@ -878,15 +871,6 @@ function PosWorkspace({
                   setReceiptInvoice(inv);
                 }}
                 onNotify={notify}
-              />
-            )}
-
-            {section === 'laravel' && (
-              <LaravelExporterView
-                lang={lang}
-                authToken={authToken}
-                onDownloadZip={() => void handleDownloadLaravelZip()}
-                onNotify={(m) => notify(m)}
               />
             )}
           </>

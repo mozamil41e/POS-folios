@@ -23,10 +23,6 @@ import {
   verifyPassword,
 } from './src/server/db.ts';
 import {
-  buildLaravelZipBuffer,
-  generateLaravelFiles,
-} from './src/server/laravelGenerator.ts';
-import {
   buildUbl21Xml,
   decodeZatcaTlvQr,
   dispatchToZatca,
@@ -1572,23 +1568,6 @@ app.post('/api/invoices/:id/credit-note', async (req: Request, res: Response) =>
     invoices,
     movements: getRecentMovements(80),
   });
-});
-
-// Laravel Livewire + ZATCA virtual files & ZIP export
-app.get('/api/laravel-files', (_req: Request, res: Response) => {
-  const org = getOrganizationSettings();
-  res.json({ files: generateLaravelFiles(org) });
-});
-
-app.get('/api/laravel-export', async (_req: Request, res: Response) => {
-  const org = getOrganizationSettings();
-  const zipBuffer = await buildLaravelZipBuffer(org);
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader(
-    'Content-Disposition',
-    'attachment; filename="mizan-laravel-livewire-zatca.zip"'
-  );
-  res.send(zipBuffer);
 });
 
 async function startServer(): Promise<void> {

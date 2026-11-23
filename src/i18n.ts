@@ -9,8 +9,6 @@ export const translations = {
     navPurchases: 'المشتريات',
     navInvoices: 'الفواتير والإعدادات',
     navZatca: 'هيئة الزكاة ZATCA',
-    navLaravel: 'حزمة Laravel',
-    downloadLaravel: 'تصدير Laravel ZIP',
     langToggle: 'English',
     themeDark: 'الوضع الداكن',
     themeLight: 'الوضع الفاتح',
@@ -95,13 +93,8 @@ export const translations = {
     printBtn: 'طباعة الإيصال',
     retryBtn: 'إعادة الإرسال',
     creditNoteBtn: 'إصدار إشعار دائن (381)',
-
-    // Laravel
-    laravelTitle: 'مصدّر حزمة Laravel 11 + Livewire 3 + ZATCA',
-    laravelSubtitle: 'استعرض الملفات المولدة بناءً على إعدادات متجرك الحالية وحمّل الحزمة كاملة بصيغة ZIP',
     copyCode: 'نسخ الكود',
     copied: 'تم النسخ',
-    downloadZip: 'تحميل الحزمة الكاملة (.zip)',
 
     // Purchases
     purTitle: 'إدارة المشتريات والموردين',
@@ -141,8 +134,6 @@ export const translations = {
     navPurchases: 'Purchases',
     navInvoices: 'Invoices & Print',
     navZatca: 'ZATCA Compliance',
-    navLaravel: 'Laravel Package',
-    downloadLaravel: 'Export Laravel ZIP',
     langToggle: 'العربية',
     themeDark: 'Dark Mode',
     themeLight: 'Light Mode',
@@ -227,13 +218,8 @@ export const translations = {
     printBtn: 'Print Receipt',
     retryBtn: 'Retry Dispatch',
     creditNoteBtn: 'Credit Note (381)',
-
-    // Laravel
-    laravelTitle: 'Laravel 11 + Livewire 3 + ZATCA Exporter',
-    laravelSubtitle: 'Inspect generated source files pre-configured with your store profile and download the full ZIP archive',
     copyCode: 'Copy Code',
     copied: 'Copied',
-    downloadZip: 'Download Full Package (.zip)',
 
     // Purchases
     purTitle: 'Purchases & Suppliers',

@@ -149,15 +149,6 @@ export interface DecodedTlvTag {
   value: string;
 }
 
-export interface LaravelVirtualFile {
-  path: string;
-  language: 'php' | 'blade' | 'json' | 'env' | 'markdown';
-  category: 'services' | 'livewire' | 'models' | 'database' | 'views' | 'config';
-  description_ar: string;
-  description_en: string;
-  content: string;
-}
-
 export type PurchasePaymentStatus = 'paid' | 'credit' | 'partial';
 
 export interface Supplier {
