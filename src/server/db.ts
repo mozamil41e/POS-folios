@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import type {
+  AuthUser,
   Customer,
   HeldCart,
   Invoice,
@@ -13,6 +14,7 @@ import type {
   PurchaseItem,
   StockMovement,
   Supplier,
+  UserRole,
 } from '../types.ts';
 import {
   GENESIS_PIH,
@@ -46,6 +48,11 @@ export function initDatabase(): void {
       country_code TEXT NOT NULL DEFAULT 'SA',
       egs_serial TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'simulator',
+      zatca_enabled INTEGER NOT NULL DEFAULT 0,
+      public_base_url TEXT NOT NULL DEFAULT '',
+      thermal_width_mm INTEGER NOT NULL DEFAULT 80,
+      auto_print_receipt INTEGER NOT NULL DEFAULT 0,
+      font_size TEXT NOT NULL DEFAULT 'medium',
       ccsid_token TEXT NOT NULL DEFAULT '',
       ccsid_secret TEXT NOT NULL DEFAULT '',
       ccsid_request_id TEXT NOT NULL DEFAULT '',
@@ -205,7 +212,46 @@ export function initDatabase(): void {
       line_total REAL NOT NULL,
       FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      full_name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'cashier',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
   `);
+
+  const orgCols = db
+    .prepare('PRAGMA table_info(organization_settings)')
+    .all() as Array<{ name: string }>;
+  const colNames = new Set(orgCols.map((c) => c.name));
+
+  if (!colNames.has('zatca_enabled')) {
+    db.exec('ALTER TABLE organization_settings ADD COLUMN zatca_enabled INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!colNames.has('public_base_url')) {
+    db.exec("ALTER TABLE organization_settings ADD COLUMN public_base_url TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.has('thermal_width_mm')) {
+    db.exec('ALTER TABLE organization_settings ADD COLUMN thermal_width_mm INTEGER NOT NULL DEFAULT 80');
+  }
+  if (!colNames.has('auto_print_receipt')) {
+    db.exec('ALTER TABLE organization_settings ADD COLUMN auto_print_receipt INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!colNames.has('font_size')) {
+    db.exec("ALTER TABLE organization_settings ADD COLUMN font_size TEXT NOT NULL DEFAULT 'medium'");
+  }
 
   const existingOrg = db
     .prepare('SELECT id FROM organization_settings WHERE id = 1')
@@ -224,12 +270,14 @@ export function initDatabase(): void {
       INSERT INTO organization_settings (
         id, name_ar, name_en, vat_number, cr_number, street_ar, building_no,
         city_ar, postal_code, country_code, egs_serial, mode,
+        zatca_enabled, public_base_url, thermal_width_mm, auto_print_receipt, font_size,
         ccsid_token, ccsid_secret, ccsid_request_id,
         pcsid_token, pcsid_secret,
         private_key_pem, public_key_base64, csr_pem,
         onboarding_step, last_icv, last_pih
       ) VALUES (
         1, ?, ?, ?, ?, ?, ?, ?, ?, 'SA', ?, 'simulator',
+        0, '', 80, 0, 'medium',
         'CCSID-DEMO-884102', 'sec-demo-ccsid', '100049218',
         'PCSID-MZN-994120', 'sec-demo-pcsid',
         ?, ?, ?, 4, 0, ?
@@ -727,4 +775,175 @@ export function getHeldCarts(): HeldCart[] {
   return db
     .prepare('SELECT * FROM held_carts ORDER BY id DESC')
     .all() as HeldCart[];
+}
+
+export function getPublicInvoiceByUuid(uuid: string): {
+  invoice: {
+    uuid: string;
+    invoice_number: string;
+    invoice_type_code: string;
+    invoice_subtype: string;
+    payment_method: string;
+    cash_amount: number;
+    card_amount: number;
+    customer_name: string;
+    customer_vat: string;
+    subtotal: number;
+    discount_total: number;
+    vat_total: number;
+    grand_total: number;
+    related_invoice_number: string | null;
+    created_at: string;
+    items: InvoiceItem[];
+  };
+  store: {
+    name_ar: string;
+    name_en: string;
+    vat_number: string;
+    cr_number: string;
+    street_ar: string;
+    building_no: string;
+    city_ar: string;
+    postal_code: string;
+    public_base_url: string;
+  };
+} | null {
+  const inv = db
+    .prepare(`
+      SELECT id, uuid, invoice_number, invoice_type_code, invoice_subtype,
+             payment_method, cash_amount, card_amount, customer_name, customer_vat,
+             subtotal, discount_total, vat_total, grand_total, related_invoice_number, created_at
+      FROM invoices
+      WHERE uuid = ?
+    `)
+    .get(uuid) as
+    | {
+        id: number;
+        uuid: string;
+        invoice_number: string;
+        invoice_type_code: string;
+        invoice_subtype: string;
+        payment_method: string;
+        cash_amount: number;
+        card_amount: number;
+        customer_name: string;
+        customer_vat: string;
+        subtotal: number;
+        discount_total: number;
+        vat_total: number;
+        grand_total: number;
+        related_invoice_number: string | null;
+        created_at: string;
+      }
+    | undefined;
+
+  if (!inv) return null;
+
+  const items = db
+    .prepare('SELECT * FROM invoice_items WHERE invoice_id = ?')
+    .all(inv.id) as InvoiceItem[];
+  const org = getOrganizationSettings();
+
+  const { id: _internalId, ...publicInvoice } = inv;
+  return {
+    invoice: {
+      ...publicInvoice,
+      items,
+    },
+    store: {
+      name_ar: org.name_ar,
+      name_en: org.name_en,
+      vat_number: org.vat_number,
+      cr_number: org.cr_number,
+      street_ar: org.street_ar,
+      building_no: org.building_no,
+      city_ar: org.city_ar,
+      postal_code: org.postal_code,
+      public_base_url: org.public_base_url,
+    },
+  };
+}
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+export function verifyPassword(password: string, storedHash: string): boolean {
+  const parts = storedHash.split(':');
+  if (parts.length !== 2) return false;
+  const [salt, hexHash] = parts;
+  if (!salt || !hexHash) return false;
+  try {
+    const derived = crypto.scryptSync(password, salt, 64);
+    const expected = Buffer.from(hexHash, 'hex');
+    if (derived.length !== expected.length) return false;
+    return crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
+}
+
+export function hasAnyUsers(): boolean {
+  const row = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
+  return row.cnt > 0;
+}
+
+export function createSessionForUser(userId: number): { token: string; expiresAt: string } {
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+
+  db.prepare('DELETE FROM user_sessions WHERE user_id = ? AND expires_at <= ?').run(
+    userId,
+    now.toISOString()
+  );
+
+  db.prepare(`
+    INSERT INTO user_sessions (user_id, token_hash, expires_at, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(userId, tokenHash, expiresAt, now.toISOString());
+
+  return { token, expiresAt };
+}
+
+export function getUserBySessionToken(token: string): AuthUser | null {
+  if (!token) return null;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const nowIso = new Date().toISOString();
+
+  const row = db
+    .prepare(`
+      SELECT u.id, u.full_name, u.email, u.role, u.created_at
+      FROM user_sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND s.expires_at > ?
+    `)
+    .get(tokenHash, nowIso) as
+    | {
+        id: number;
+        full_name: string;
+        email: string;
+        role: string;
+        created_at: string;
+      }
+    | undefined;
+
+  if (!row) return null;
+  const role: UserRole = row.role === 'admin' ? 'admin' : 'cashier';
+  return {
+    id: row.id,
+    full_name: row.full_name,
+    email: row.email,
+    role,
+    created_at: row.created_at,
+  };
+}
+
+export function revokeSessionToken(token: string): void {
+  if (!token) return;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(tokenHash);
 }

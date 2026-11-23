@@ -6,6 +6,7 @@ export const translations = {
     navPos: 'نقطة البيع',
     navInventory: 'المخزون',
     navPurchases: 'المشتريات',
+    navInvoices: 'الفواتير والإعدادات',
     navZatca: 'هيئة الزكاة ZATCA',
     navLaravel: 'حزمة Laravel',
     downloadLaravel: 'تصدير Laravel ZIP',
@@ -49,7 +50,8 @@ export const translations = {
     vatAmount: 'ضريبة القيمة المضافة (15%)',
     grandTotal: 'الإجمالي المستحق',
     checkoutBtn: 'إتمام الدفع وإصدار فاتورة ZATCA',
-    processing: 'جاري التوقيع والاعتماد...',
+    checkoutBtnDirect: 'إتمام الدفع وطباعة الفاتورة',
+    processing: 'جاري حفظ وإصدار الفاتورة...',
 
     // Inventory
     invTitle: 'إدارة المخزون والأصناف',
@@ -82,6 +84,7 @@ export const translations = {
     zatcaQrDecoderTab: 'فاحص رمز QR (TLV)',
     modeSimulator: 'المحاكي البروتوكولي المحلي',
     modeFatoora: 'بوابة فاتورة التجريبية (Simulation)',
+    modeDirect: 'الفوترة المباشرة (ZATCA معطل)',
     icvCol: 'العداد ICV',
     invNoCol: 'رقم الفاتورة',
     typeCol: 'النوع',
@@ -120,6 +123,7 @@ export const translations = {
     navPos: 'POS Terminal',
     navInventory: 'Inventory',
     navPurchases: 'Purchases',
+    navInvoices: 'Invoices & Print',
     navZatca: 'ZATCA Compliance',
     navLaravel: 'Laravel Package',
     downloadLaravel: 'Export Laravel ZIP',
@@ -163,7 +167,8 @@ export const translations = {
     vatAmount: 'VAT (15%)',
     grandTotal: 'Total Payable',
     checkoutBtn: 'Complete Sale & Issue ZATCA Invoice',
-    processing: 'Signing & Submitting...',
+    checkoutBtnDirect: 'Complete Sale & Print Receipt',
+    processing: 'Issuing Invoice...',
 
     // Inventory
     invTitle: 'Inventory & Stock Control',
@@ -196,6 +201,7 @@ export const translations = {
     zatcaQrDecoderTab: 'TLV QR Inspector',
     modeSimulator: 'Local Protocol Simulator',
     modeFatoora: 'Fatoora Simulation API',
+    modeDirect: 'Direct POS Mode (ZATCA Disabled)',
     icvCol: 'ICV',
     invNoCol: 'Invoice #',
     typeCol: 'Type',

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Globe, Moon, Sun } from 'lucide-react';
+import { Globe, LogOut, Moon, Sun, User } from 'lucide-react';
 import type {
+  AuthUser,
   BootstrapPayload,
   Invoice,
   InvoiceSubtype,
@@ -11,14 +12,17 @@ import type {
   PurchasePaymentStatus,
 } from './types';
 import { translations } from './i18n';
+import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
 import { InventoryView } from './components/InventoryView';
 import { PurchasesView } from './components/PurchasesView';
+import { InvoicesSettingsView } from './components/InvoicesSettingsView';
 import { ZatcaCenterView } from './components/ZatcaCenterView';
 import { LaravelExporterView } from './components/LaravelExporterView';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
+import { PublicInvoicePage } from './components/PublicInvoicePage';
 
-type ActiveSection = 'pos' | 'inventory' | 'purchases' | 'zatca' | 'laravel';
+type ActiveSection = 'pos' | 'inventory' | 'purchases' | 'invoices' | 'zatca' | 'laravel';
 
 interface ToastMessage {
   id: number;
@@ -29,23 +33,8 @@ interface ToastMessage {
 export default function App() {
   const [lang, setLang] = useState<Language>('ar');
   const [darkMode, setDarkMode] = useState(false);
-  const [section, setSection] = useState<ActiveSection>('pos');
-  const [data, setData] = useState<BootstrapPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [receiptInvoice, setReceiptInvoice] = useState<Invoice | null>(null);
-  const [toast, setToast] = useState<ToastMessage | null>(null);
-
-  const t = translations[lang];
-  const isAr = lang === 'ar';
-
-  const notify = useCallback((text: string, tone: 'success' | 'error' = 'success') => {
-    const id = Date.now();
-    setToast({ id, text, tone });
-    setTimeout(() => {
-      setToast((curr) => (curr?.id === id ? null : curr));
-    }, 3400);
-  }, []);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -60,10 +49,131 @@ export default function App() {
     }
   }, [darkMode]);
 
+  const publicMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/i\/([a-zA-Z0-9-]+)\/?$/)
+      : null;
+
+  if (publicMatch) {
+    return <PublicInvoicePage uuid={publicMatch[1]} />;
+  }
+
+  if (!authToken || !authUser) {
+    return (
+      <AuthView
+        lang={lang}
+        darkMode={darkMode}
+        onToggleLang={() => setLang((prev) => (prev === 'ar' ? 'en' : 'ar'))}
+        onToggleDarkMode={() => setDarkMode((prev) => !prev)}
+        onAuthSuccess={(token, user) => {
+          setAuthToken(token);
+          setAuthUser(user);
+        }}
+      />
+    );
+  }
+
+  return (
+    <PosWorkspace
+      lang={lang}
+      darkMode={darkMode}
+      authToken={authToken}
+      authUser={authUser}
+      onToggleLang={() => setLang((prev) => (prev === 'ar' ? 'en' : 'ar'))}
+      onToggleDarkMode={() => setDarkMode((prev) => !prev)}
+      onSessionExpired={() => {
+        setAuthToken(null);
+        setAuthUser(null);
+      }}
+    />
+  );
+}
+
+interface PosWorkspaceProps {
+  lang: Language;
+  darkMode: boolean;
+  authToken: string;
+  authUser: AuthUser;
+  onToggleLang: () => void;
+  onToggleDarkMode: () => void;
+  onSessionExpired: () => void;
+}
+
+function PosWorkspace({
+  lang,
+  darkMode,
+  authToken,
+  authUser,
+  onToggleLang,
+  onToggleDarkMode,
+  onSessionExpired,
+}: PosWorkspaceProps) {
+  const [section, setSection] = useState<ActiveSection>('pos');
+  const [data, setData] = useState<BootstrapPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [receiptInvoice, setReceiptInvoice] = useState<Invoice | null>(null);
+  const [autoPrintModal, setAutoPrintModal] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  const t = translations[lang];
+  const isAr = lang === 'ar';
+  const zatcaEnabled = data?.settings.zatca_enabled === 1;
+
+  const notify = useCallback((text: string, tone: 'success' | 'error' = 'success') => {
+    const id = Date.now();
+    setToast({ id, text, tone });
+    setTimeout(() => {
+      setToast((curr) => (curr?.id === id ? null : curr));
+    }, 3400);
+  }, []);
+
+  const apiFetch = useCallback(
+    async (url: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers);
+      headers.set('Authorization', `Bearer ${authToken}`);
+      const res = await fetch(url, { ...init, headers });
+      if (res.status === 401) {
+        onSessionExpired();
+      }
+      return res;
+    },
+    [authToken, onSessionExpired]
+  );
+
+  const handleLogout = async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      onSessionExpired();
+    }
+  };
+
+  const handleDownloadLaravelZip = async () => {
+    const res = await apiFetch('/api/laravel-export');
+    if (!res.ok) {
+      notify(isAr ? 'تعذر تحميل حزمة Laravel' : 'Failed to download Laravel ZIP', 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'mizan-laravel-livewire-zatca.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    const level = data?.settings.font_size;
+    document.documentElement.dataset.fontSize =
+      level === 'small' || level === 'large' ? level : 'medium';
+  }, [data?.settings.font_size]);
+
   const fetchBootstrap = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/bootstrap');
+      const res = await apiFetch('/api/bootstrap');
       if (!res.ok) throw new Error('Failed to load workspace data.');
       const payload = (await res.json()) as BootstrapPayload;
       setData(payload);
@@ -73,7 +183,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiFetch]);
 
   useEffect(() => {
     fetchBootstrap();
@@ -87,7 +197,7 @@ export default function App() {
     discount_total: number;
     customer_id: number | null;
   }) => {
-    const res = await fetch('/api/invoices', {
+    const res = await apiFetch('/api/invoices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -116,11 +226,17 @@ export default function App() {
         : prev
     );
     if (body.invoice) {
+      const shouldAutoPrint = (body.settings?.auto_print_receipt ?? data?.settings.auto_print_receipt) === 1;
+      setAutoPrintModal(shouldAutoPrint);
       setReceiptInvoice(body.invoice);
       notify(
         isAr
-          ? `تم إصدار الفاتورة ${body.invoice.invoice_number} (${body.invoice.zatca_status})`
-          : `Issued ${body.invoice.invoice_number} (${body.invoice.zatca_status})`
+          ? `تم إصدار الفاتورة ${body.invoice.invoice_number}${
+              body.settings?.zatca_enabled === 1 ? ` (${body.invoice.zatca_status})` : ''
+            }`
+          : `Issued ${body.invoice.invoice_number}${
+              body.settings?.zatca_enabled === 1 ? ` (${body.invoice.zatca_status})` : ''
+            }`
       );
     }
   };
@@ -132,7 +248,7 @@ export default function App() {
     customer_id: number | null;
     invoice_subtype: InvoiceSubtype;
   }) => {
-    const res = await fetch('/api/carts/hold', {
+    const res = await apiFetch('/api/carts/hold', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -144,7 +260,7 @@ export default function App() {
   };
 
   const handleDeleteHeldCart = async (id: number) => {
-    const res = await fetch(`/api/carts/hold/${id}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/carts/hold/${id}`, { method: 'DELETE' });
     const body = (await res.json()) as { heldCarts?: BootstrapPayload['heldCarts'] };
     if (res.ok && body.heldCarts) {
       setData((prev) => (prev ? { ...prev, heldCarts: body.heldCarts! } : prev));
@@ -159,7 +275,7 @@ export default function App() {
     address_ar: string;
     phone: string;
   }): Promise<number> => {
-    const res = await fetch('/api/customers', {
+    const res = await apiFetch('/api/customers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -177,7 +293,7 @@ export default function App() {
   };
 
   const handleCreateProduct = async (payload: Record<string, unknown>) => {
-    const res = await fetch('/api/products', {
+    const res = await apiFetch('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -204,7 +320,7 @@ export default function App() {
   };
 
   const handleUpdateProduct = async (id: number, payload: Record<string, unknown>) => {
-    const res = await fetch(`/api/products/${id}`, {
+    const res = await apiFetch(`/api/products/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -222,7 +338,7 @@ export default function App() {
     qty: number;
     notes: string;
   }) => {
-    const res = await fetch('/api/inventory/movement', {
+    const res = await apiFetch('/api/inventory/movement', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -257,7 +373,7 @@ export default function App() {
     email: string;
     address_ar: string;
   }): Promise<number> => {
-    const res = await fetch('/api/suppliers', {
+    const res = await apiFetch('/api/suppliers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -286,7 +402,7 @@ export default function App() {
     notes: string;
     items: Array<{ product_id: number; qty: number; unit_cost: number; tax_rate: number }>;
   }) => {
-    const res = await fetch('/api/purchases', {
+    const res = await apiFetch('/api/purchases', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -320,7 +436,7 @@ export default function App() {
   };
 
   const handlePayPurchase = async (purchaseId: number, amount: number) => {
-    const res = await fetch(`/api/purchases/${purchaseId}/pay`, {
+    const res = await apiFetch(`/api/purchases/${purchaseId}/pay`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount }),
@@ -340,7 +456,7 @@ export default function App() {
   };
 
   const handleUpdateSettings = async (payload: Partial<OrganizationSettings>) => {
-    const res = await fetch('/api/settings', {
+    const res = await apiFetch('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -352,12 +468,17 @@ export default function App() {
     }
     if (body.settings) {
       setData((prev) => (prev ? { ...prev, settings: body.settings! } : prev));
-      notify(isAr ? 'تم حفظ إعدادات المنشأة' : 'Settings saved');
+      if (body.settings.zatca_enabled !== 1 && section === 'zatca') {
+        setSection('invoices');
+      } else if (body.settings.zatca_enabled === 1 && section === 'invoices') {
+        setSection('zatca');
+      }
+      notify(isAr ? 'تم حفظ الإعدادات' : 'Settings saved');
     }
   };
 
   const handleGenerateKeys = async () => {
-    const res = await fetch('/api/zatca/generate-keys', { method: 'POST' });
+    const res = await apiFetch('/api/zatca/generate-keys', { method: 'POST' });
     const body = (await res.json()) as { settings?: OrganizationSettings };
     if (res.ok && body.settings) {
       setData((prev) => (prev ? { ...prev, settings: body.settings! } : prev));
@@ -369,7 +490,7 @@ export default function App() {
     action: 'request_ccsid' | 'compliance_check' | 'request_pcsid',
     otp?: string
   ) => {
-    const res = await fetch('/api/zatca/onboard', {
+    const res = await apiFetch('/api/zatca/onboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, otp }),
@@ -386,7 +507,7 @@ export default function App() {
   };
 
   const handleRetryInvoice = async (id: number) => {
-    const res = await fetch(`/api/invoices/${id}/retry`, { method: 'POST' });
+    const res = await apiFetch(`/api/invoices/${id}/retry`, { method: 'POST' });
     const body = (await res.json()) as { invoices?: Invoice[] };
     if (res.ok && body.invoices) {
       setData((prev) => (prev ? { ...prev, invoices: body.invoices! } : prev));
@@ -395,7 +516,7 @@ export default function App() {
   };
 
   const handleCreditNote = async (invoiceId: number) => {
-    const res = await fetch(`/api/invoices/${invoiceId}/credit-note`, {
+    const res = await apiFetch(`/api/invoices/${invoiceId}/credit-note`, {
       method: 'POST',
     });
     const body = (await res.json()) as {
@@ -455,9 +576,9 @@ export default function App() {
                 ['pos', t.navPos],
                 ['inventory', t.navInventory],
                 ['purchases', t.navPurchases],
-                ['zatca', t.navZatca],
+                zatcaEnabled ? ['zatca', t.navZatca] : ['invoices', t.navInvoices],
                 ['laravel', t.navLaravel],
-              ] as const
+              ] as Array<[ActiveSection, string]>
             ).map(([key, label]) => (
               <button
                 key={key}
@@ -476,13 +597,13 @@ export default function App() {
 
           {/* Zone 3: 1 Primary Action */}
           <div className="shrink-0 hidden sm:block">
-            <a
-              href="/api/laravel-export"
-              download="mizan-laravel-livewire-zatca.zip"
+            <button
+              type="button"
+              onClick={() => void handleDownloadLaravelZip()}
               className="inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               {t.downloadLaravel}
-            </a>
+            </button>
           </div>
         </div>
       </header>
@@ -500,16 +621,32 @@ export default function App() {
               <span className="font-mono tabular-nums">{data.settings.vat_number}</span>
               <span aria-hidden="true">·</span>
               <span>
-                {data.settings.mode === 'fatoora_simulation'
+                {!zatcaEnabled
+                  ? t.modeDirect
+                  : data.settings.mode === 'fatoora_simulation'
                   ? t.modeFatoora
                   : t.modeSimulator}
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0">
+                <User className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
+                <span className="font-medium">{authUser.full_name}</span>
+                <span aria-hidden="true" className="text-slate-400">·</span>
+                <span className="text-slate-500 dark:text-slate-400">
+                  {authUser.role === 'admin'
+                    ? isAr
+                      ? 'مدير النظام'
+                      : 'Admin'
+                    : isAr
+                    ? 'كاشير'
+                    : 'Cashier'}
+                </span>
+              </div>
               <button
                 type="button"
-                onClick={() => setLang((prev) => (prev === 'ar' ? 'en' : 'ar'))}
+                onClick={onToggleLang}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
               >
                 <Globe className="w-3.5 h-3.5" />
@@ -517,11 +654,19 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setDarkMode((prev) => !prev)}
+                onClick={onToggleDarkMode}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
               >
                 {darkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
                 {darkMode ? t.themeLight : t.themeDark}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleLogout()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-900/60 bg-white dark:bg-slate-900 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors whitespace-nowrap shrink-0"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                {isAr ? 'خروج' : 'Logout'}
               </button>
             </div>
           </div>
@@ -553,6 +698,7 @@ export default function App() {
                 products={data.products}
                 customers={data.customers}
                 heldCarts={data.heldCarts}
+                zatcaEnabled={zatcaEnabled}
                 onCheckout={handleCheckout}
                 onHoldCart={handleHoldCart}
                 onDeleteHeldCart={handleDeleteHeldCart}
@@ -585,22 +731,46 @@ export default function App() {
               />
             )}
 
-            {section === 'zatca' && (
+            {section === 'invoices' && (
+              <InvoicesSettingsView
+                lang={lang}
+                settings={data.settings}
+                invoices={data.invoices}
+                onOpenReceipt={(inv) => {
+                  setAutoPrintModal(false);
+                  setReceiptInvoice(inv);
+                }}
+                onCreditNote={handleCreditNote}
+                onUpdateSettings={handleUpdateSettings}
+                onNotify={notify}
+              />
+            )}
+
+            {section === 'zatca' && zatcaEnabled && (
               <ZatcaCenterView
                 lang={lang}
+                authToken={authToken}
                 settings={data.settings}
                 invoices={data.invoices}
                 onUpdateSettings={handleUpdateSettings}
                 onGenerateKeys={handleGenerateKeys}
                 onOnboardStep={handleOnboardStep}
                 onRetryInvoice={handleRetryInvoice}
-                onOpenReceipt={(inv) => setReceiptInvoice(inv)}
+                onOpenReceipt={(inv) => {
+                  setAutoPrintModal(false);
+                  setReceiptInvoice(inv);
+                }}
                 onNotify={notify}
               />
             )}
 
             {section === 'laravel' && (
-              <LaravelExporterView lang={lang} onNotify={(m) => notify(m)} />
+              <LaravelExporterView
+                lang={lang}
+                authToken={authToken}
+                onDownloadZip={() => void handleDownloadLaravelZip()}
+                onNotify={(m) => notify(m)}
+              />
             )}
           </>
         )}
@@ -612,8 +782,13 @@ export default function App() {
           invoice={receiptInvoice}
           settings={data.settings}
           lang={lang}
-          onClose={() => setReceiptInvoice(null)}
+          autoPrint={autoPrintModal}
+          onClose={() => {
+            setReceiptInvoice(null);
+            setAutoPrintModal(false);
+          }}
           onCreditNote={handleCreditNote}
+          onNotify={notify}
         />
       )}
 

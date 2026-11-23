@@ -3,7 +3,8 @@ export type ZatcaMode = 'simulator' | 'fatoora_simulation';
 export type InvoiceTypeCode = '388' | '381' | '383';
 export type InvoiceSubtype = '0200000' | '0100000';
 export type PaymentMethod = 'cash' | 'card' | 'split';
-export type ZatcaStatus = 'REPORTED' | 'CLEARED' | 'PENDING' | 'REJECTED';
+export type ZatcaStatus = 'REPORTED' | 'CLEARED' | 'PENDING' | 'REJECTED' | 'DISABLED';
+export type FontSizeLevel = 'small' | 'medium' | 'large';
 
 export interface OrganizationSettings {
   id: number;
@@ -18,6 +19,11 @@ export interface OrganizationSettings {
   country_code: string;
   egs_serial: string;
   mode: ZatcaMode;
+  zatca_enabled: number;
+  public_base_url: string;
+  thermal_width_mm: number;
+  auto_print_receipt: number;
+  font_size: FontSizeLevel;
   ccsid_token: string;
   ccsid_secret: string;
   ccsid_request_id: string;
@@ -195,6 +201,16 @@ export interface Purchase {
   received_at: string;
   created_at: string;
   items?: PurchaseItem[];
+}
+
+export type UserRole = 'admin' | 'cashier';
+
+export interface AuthUser {
+  id: number;
+  full_name: string;
+  email: string;
+  role: UserRole;
+  created_at: string;
 }
 
 export interface BootstrapPayload {

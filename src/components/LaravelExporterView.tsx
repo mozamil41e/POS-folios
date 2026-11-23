@@ -5,10 +5,17 @@ import { translations } from '../i18n';
 
 interface LaravelExporterViewProps {
   lang: Language;
+  authToken: string;
+  onDownloadZip: () => void;
   onNotify: (msg: string) => void;
 }
 
-export function LaravelExporterView({ lang, onNotify }: LaravelExporterViewProps) {
+export function LaravelExporterView({
+  lang,
+  authToken,
+  onDownloadZip,
+  onNotify,
+}: LaravelExporterViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
 
@@ -17,16 +24,19 @@ export function LaravelExporterView({ lang, onNotify }: LaravelExporterViewProps
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    fetch('/api/laravel-files')
+    fetch('/api/laravel-files', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
       .then((r) => r.json())
-      .then((d: { files: LaravelVirtualFile[] }) => {
-        setFiles(d.files);
-        if (d.files.length > 0) {
-          setSelectedPath(d.files[0].path);
+      .then((d: { files?: LaravelVirtualFile[] }) => {
+        const list = d.files ?? [];
+        setFiles(list);
+        if (list.length > 0) {
+          setSelectedPath(list[0].path);
         }
       })
       .catch(() => setFiles([]));
-  }, []);
+  }, [authToken]);
 
   const activeFile = useMemo(
     () => files.find((f) => f.path === selectedPath) ?? files[0] ?? null,
@@ -53,14 +63,14 @@ export function LaravelExporterView({ lang, onNotify }: LaravelExporterViewProps
           </p>
         </div>
 
-        <a
-          href="/api/laravel-export"
-          download="mizan-laravel-livewire-zatca.zip"
+        <button
+          type="button"
+          onClick={onDownloadZip}
           className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 self-start"
         >
           <Download className="w-4 h-4" />
           {t.downloadZip}
-        </a>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

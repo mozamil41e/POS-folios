@@ -56,6 +56,7 @@ interface PosTerminalViewProps {
     phone: string;
   }) => Promise<number>;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
+  zatcaEnabled?: boolean;
 }
 
 export function PosTerminalView({
@@ -68,6 +69,7 @@ export function PosTerminalView({
   onDeleteHeldCart,
   onCreateCustomer,
   onNotify,
+  zatcaEnabled = false,
 }: PosTerminalViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
@@ -795,7 +797,11 @@ export function PosTerminalView({
           onClick={handleCompleteCheckout}
           className="w-full py-3 px-4 bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-semibold rounded-xl transition-colors whitespace-nowrap"
         >
-          {submitting ? t.processing : t.checkoutBtn}
+          {submitting
+            ? t.processing
+            : zatcaEnabled
+            ? t.checkoutBtn
+            : t.checkoutBtnDirect}
         </button>
       </div>
     </div>

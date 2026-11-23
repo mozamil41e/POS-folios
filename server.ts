@@ -4,6 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import type { Request, Response } from 'express';
 import {
+  createSessionForUser,
   db,
   getAllCustomers,
   getAllInvoices,
@@ -12,8 +13,14 @@ import {
   getAllSuppliers,
   getHeldCarts,
   getOrganizationSettings,
+  getPublicInvoiceByUuid,
   getRecentMovements,
+  getUserBySessionToken,
+  hasAnyUsers,
+  hashPassword,
   initDatabase,
+  revokeSessionToken,
+  verifyPassword,
 } from './src/server/db.ts';
 import {
   buildLaravelZipBuffer,
@@ -27,6 +34,7 @@ import {
   signXmlAndBuildQr,
 } from './src/server/zatca.ts';
 import type {
+  FontSizeLevel,
   Invoice,
   InvoiceItem,
   InvoiceSubtype,
@@ -36,6 +44,7 @@ import type {
   Purchase,
   PurchasePaymentStatus,
   Supplier,
+  UserRole,
   ZatcaMode,
 } from './src/types.ts';
 
@@ -43,6 +52,155 @@ initDatabase();
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
+
+// Public read-only invoice lookup (used by thermal receipt QR public URL)
+app.get('/api/public/invoices/:uuid', (req: Request, res: Response) => {
+  const uuid = String(req.params.uuid ?? '').trim();
+  if (!uuid || uuid.length > 80) {
+    res.status(400).json({ error: 'Invalid invoice identifier.' });
+    return;
+  }
+  const payload = getPublicInvoiceByUuid(uuid);
+  if (!payload) {
+    res.status(404).json({ error: 'Invoice not found.' });
+    return;
+  }
+  res.json(payload);
+});
+
+// Public Authentication Routes
+app.get('/api/auth/status', (_req: Request, res: Response) => {
+  res.json({ hasUsers: hasAnyUsers() });
+});
+
+app.post('/api/auth/register', (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const fullName = String(b.full_name ?? '').trim();
+  const email = String(b.email ?? '').trim().toLowerCase();
+  const password = typeof b.password === 'string' ? b.password : '';
+
+  if (fullName.length < 2 || fullName.length > 100) {
+    res.status(400).json({ error: 'Full name must be between 2 and 100 characters.' });
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
+    res.status(400).json({ error: 'Valid email address is required.' });
+    return;
+  }
+  if (password.length < 6 || password.length > 128) {
+    res.status(400).json({ error: 'Password must be between 6 and 128 characters.' });
+    return;
+  }
+
+  try {
+    const registerTx = db.transaction(() => {
+      const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+      if (existing) {
+        throw new Error('EMAIL_EXISTS');
+      }
+
+      const countRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
+      const role: UserRole = countRow.cnt === 0 ? 'admin' : 'cashier';
+      const now = new Date().toISOString();
+      const passwordHash = hashPassword(password);
+
+      const info = db
+        .prepare(`
+          INSERT INTO users (full_name, email, password_hash, role, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `)
+        .run(fullName, email, passwordHash, role, now);
+
+      const userId = Number(info.lastInsertRowid);
+      const session = createSessionForUser(userId);
+      return {
+        token: session.token,
+        user: {
+          id: userId,
+          full_name: fullName,
+          email,
+          role,
+          created_at: now,
+        },
+      };
+    });
+
+    const result = registerTx();
+    res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === 'EMAIL_EXISTS') {
+      res.status(409).json({ error: 'An account with this email already exists.' });
+      return;
+    }
+    res.status(400).json({ error: 'Failed to create account.' });
+  }
+});
+
+app.post('/api/auth/login', (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const email = String(b.email ?? '').trim().toLowerCase();
+  const password = typeof b.password === 'string' ? b.password : '';
+
+  if (!email || !password) {
+    res.status(400).json({ error: 'Email and password are required.' });
+    return;
+  }
+
+  const user = db
+    .prepare('SELECT id, full_name, email, password_hash, role, created_at FROM users WHERE email = ?')
+    .get(email) as
+    | {
+        id: number;
+        full_name: string;
+        email: string;
+        password_hash: string;
+        role: string;
+        created_at: string;
+      }
+    | undefined;
+
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    res.status(401).json({ error: 'Invalid email or password.' });
+    return;
+  }
+
+  const session = createSessionForUser(user.id);
+  const role: UserRole = user.role === 'admin' ? 'admin' : 'cashier';
+  res.json({
+    token: session.token,
+    user: {
+      id: user.id,
+      full_name: user.full_name,
+      email: user.email,
+      role,
+      created_at: user.created_at,
+    },
+  });
+});
+
+// Require valid Bearer session token for all private /api routes
+app.use('/api', (req: Request, res: Response, next) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const user = getUserBySessionToken(token);
+  if (!user) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return;
+  }
+  res.locals.authUser = user;
+  res.locals.authToken = token;
+  next();
+});
+
+app.get('/api/auth/me', (_req: Request, res: Response) => {
+  res.json({ user: res.locals.authUser });
+});
+
+app.post('/api/auth/logout', (_req: Request, res: Response) => {
+  const token = String(res.locals.authToken ?? '');
+  revokeSessionToken(token);
+  res.json({ ok: true });
+});
 
 // Bootstrap entire workspace state
 app.get('/api/bootstrap', (_req: Request, res: Response) => {
@@ -58,7 +216,7 @@ app.get('/api/bootstrap', (_req: Request, res: Response) => {
   });
 });
 
-// Organization & ZATCA settings
+// Organization, Thermal Print & ZATCA settings
 app.put('/api/settings', (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const current = getOrganizationSettings();
@@ -74,6 +232,53 @@ app.put('/api/settings', (req: Request, res: Response) => {
   const egsSerial = String(body.egs_serial ?? current.egs_serial).trim();
   const mode: ZatcaMode =
     body.mode === 'fatoora_simulation' ? 'fatoora_simulation' : 'simulator';
+  const zatcaEnabled =
+    body.zatca_enabled === undefined
+      ? current.zatca_enabled
+      : body.zatca_enabled === true || body.zatca_enabled === 1 || body.zatca_enabled === '1'
+      ? 1
+      : 0;
+  const thermalWidthMm =
+    body.thermal_width_mm === undefined
+      ? current.thermal_width_mm
+      : Number(body.thermal_width_mm) === 58
+      ? 58
+      : 80;
+  const autoPrintReceipt =
+    body.auto_print_receipt === undefined
+      ? current.auto_print_receipt
+      : body.auto_print_receipt === true ||
+        body.auto_print_receipt === 1 ||
+        body.auto_print_receipt === '1'
+      ? 1
+      : 0;
+  const fontSize: FontSizeLevel =
+    body.font_size === 'small' || body.font_size === 'large'
+      ? body.font_size
+      : body.font_size === 'medium'
+      ? 'medium'
+      : current.font_size === 'small' || current.font_size === 'large'
+      ? current.font_size
+      : 'medium';
+
+  let publicBaseUrl =
+    body.public_base_url === undefined
+      ? current.public_base_url
+      : String(body.public_base_url).trim().replace(/\/+$/, '');
+
+  if (publicBaseUrl) {
+    try {
+      const parsed = new URL(publicBaseUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        res.status(400).json({ error: 'Public Base URL must use http:// or https://' });
+        return;
+      }
+      publicBaseUrl = parsed.origin + parsed.pathname.replace(/\/+$/, '');
+    } catch {
+      res.status(400).json({ error: 'Invalid Public Base URL format.' });
+      return;
+    }
+  }
 
   if (!nameAr || !vatNumber) {
     res.status(400).json({ error: 'Store name and VAT number are required.' });
@@ -84,7 +289,8 @@ app.put('/api/settings', (req: Request, res: Response) => {
     UPDATE organization_settings
     SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?,
         street_ar = ?, building_no = ?, city_ar = ?, postal_code = ?,
-        egs_serial = ?, mode = ?
+        egs_serial = ?, mode = ?, zatca_enabled = ?, public_base_url = ?,
+        thermal_width_mm = ?, auto_print_receipt = ?, font_size = ?
     WHERE id = 1
   `).run(
     nameAr,
@@ -96,7 +302,12 @@ app.put('/api/settings', (req: Request, res: Response) => {
     cityAr,
     postalCode,
     egsSerial,
-    mode
+    mode,
+    zatcaEnabled,
+    publicBaseUrl,
+    thermalWidthMm,
+    autoPrintReceipt,
+    fontSize
   );
 
   res.json({ settings: getOrganizationSettings() });
@@ -1023,25 +1234,39 @@ app.post('/api/invoices', async (req: Request, res: Response) => {
     });
 
     const result = prepared();
-    const zatcaRes = await dispatchToZatca({
-      org: result.org,
-      uuid: result.uuid,
-      invoiceHashBase64: result.invoiceHashBase64,
-      xml: result.xml,
-      invoiceSubtype: result.invoiceSubtype,
-      customerVat: result.customerVat,
-    });
+    if (result.org.zatca_enabled === 1) {
+      const zatcaRes = await dispatchToZatca({
+        org: result.org,
+        uuid: result.uuid,
+        invoiceHashBase64: result.invoiceHashBase64,
+        xml: result.xml,
+        invoiceSubtype: result.invoiceSubtype,
+        customerVat: result.customerVat,
+      });
 
-    db.prepare(`
-      UPDATE invoices
-      SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ?
-      WHERE id = ?
-    `).run(
-      zatcaRes.status,
-      zatcaRes.mode,
-      JSON.stringify(zatcaRes),
-      result.invoiceId
-    );
+      db.prepare(`
+        UPDATE invoices
+        SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ?
+        WHERE id = ?
+      `).run(
+        zatcaRes.status,
+        zatcaRes.mode,
+        JSON.stringify(zatcaRes),
+        result.invoiceId
+      );
+    } else {
+      db.prepare(`
+        UPDATE invoices
+        SET zatca_status = 'DISABLED', zatca_response_json = ?
+        WHERE id = ?
+      `).run(
+        JSON.stringify({
+          disabled: true,
+          message: 'ZATCA integration is currently disabled.',
+        }),
+        result.invoiceId
+      );
+    }
 
     const invoices = getAllInvoices();
     const createdInvoice = invoices.find((i) => i.id === result.invoiceId);
@@ -1069,6 +1294,11 @@ app.post('/api/invoices/:id/retry', async (req: Request, res: Response) => {
   }
 
   const org = getOrganizationSettings();
+  if (org.zatca_enabled !== 1) {
+    res.status(400).json({ error: 'ZATCA integration is currently disabled.' });
+    return;
+  }
+
   const zatcaRes = await dispatchToZatca({
     org,
     uuid: inv.uuid,
@@ -1243,18 +1473,30 @@ app.post('/api/invoices/:id/credit-note', async (req: Request, res: Response) =>
   });
 
   const result = prepared();
-  const zatcaRes = await dispatchToZatca({
-    org: result.org,
-    uuid: result.uuid,
-    invoiceHashBase64: result.invoiceHashBase64,
-    xml: result.xml,
-    invoiceSubtype: result.invoiceSubtype,
-    customerVat: result.customerVat,
-  });
+  if (result.org.zatca_enabled === 1) {
+    const zatcaRes = await dispatchToZatca({
+      org: result.org,
+      uuid: result.uuid,
+      invoiceHashBase64: result.invoiceHashBase64,
+      xml: result.xml,
+      invoiceSubtype: result.invoiceSubtype,
+      customerVat: result.customerVat,
+    });
 
-  db.prepare(`
-    UPDATE invoices SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ? WHERE id = ?
-  `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), result.invoiceId);
+    db.prepare(`
+      UPDATE invoices SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ? WHERE id = ?
+    `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), result.invoiceId);
+  } else {
+    db.prepare(`
+      UPDATE invoices SET zatca_status = 'DISABLED', zatca_response_json = ? WHERE id = ?
+    `).run(
+      JSON.stringify({
+        disabled: true,
+        message: 'ZATCA integration is currently disabled.',
+      }),
+      result.invoiceId
+    );
+  }
 
   const invoices = getAllInvoices();
   res.status(201).json({

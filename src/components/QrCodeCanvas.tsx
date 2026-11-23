@@ -5,32 +5,38 @@ interface QrCodeCanvasProps {
   value: string;
   size?: number;
   className?: string;
+  alt?: string;
 }
 
-export function QrCodeCanvas({ value, size = 148, className = '' }: QrCodeCanvasProps) {
-  const [svgMarkup, setSvgMarkup] = useState<string>('');
+export function QrCodeCanvas({
+  value,
+  size = 148,
+  className = '',
+  alt = 'Invoice QR Code',
+}: QrCodeCanvasProps) {
+  const [dataUrl, setDataUrl] = useState<string>('');
 
   useEffect(() => {
     let active = true;
     if (!value) {
-      setSvgMarkup('');
+      setDataUrl('');
       return;
     }
 
     QRCode.toDataURL(value, {
-      width: size,
+      width: size * 2,
       margin: 1,
       errorCorrectionLevel: 'M',
       color: {
-        dark: '#0f172a',
+        dark: '#000000',
         light: '#ffffff',
       },
     })
       .then((url) => {
-        if (active) setSvgMarkup(url);
+        if (active) setDataUrl(url);
       })
       .catch(() => {
-        if (active) setSvgMarkup('');
+        if (active) setDataUrl('');
       });
 
     return () => {
@@ -38,7 +44,7 @@ export function QrCodeCanvas({ value, size = 148, className = '' }: QrCodeCanvas
     };
   }, [value, size]);
 
-  if (!svgMarkup) {
+  if (!dataUrl) {
     return (
       <div
         style={{ width: size, height: size }}
@@ -51,8 +57,8 @@ export function QrCodeCanvas({ value, size = 148, className = '' }: QrCodeCanvas
 
   return (
     <img
-      src={svgMarkup}
-      alt="ZATCA TLV QR Code"
+      src={dataUrl}
+      alt={alt}
       width={size}
       height={size}
       className={`rounded-md border border-slate-200 bg-white p-1 ${className}`}

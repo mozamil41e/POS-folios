@@ -22,6 +22,7 @@ import { QrCodeCanvas } from './QrCodeCanvas';
 
 interface ZatcaCenterViewProps {
   lang: Language;
+  authToken: string;
   settings: OrganizationSettings;
   invoices: Invoice[];
   onUpdateSettings: (payload: Partial<OrganizationSettings>) => Promise<void>;
@@ -34,6 +35,7 @@ interface ZatcaCenterViewProps {
 
 export function ZatcaCenterView({
   lang,
+  authToken,
   settings,
   invoices,
   onUpdateSettings,
@@ -101,13 +103,16 @@ export function ZatcaCenterView({
     }
     fetch('/api/zatca/decode-qr', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
       body: JSON.stringify({ qr: targetQr }),
     })
       .then((r) => r.json())
       .then((d: { tags?: DecodedTlvTag[] }) => setDecodedTags(d.tags ?? []))
       .catch(() => setDecodedTags([]));
-  }, [selectedInvoice, qrInput, subTab]);
+  }, [selectedInvoice, qrInput, subTab, authToken]);
 
   const handleSaveOrg = async (e: React.FormEvent) => {
     e.preventDefault();
