@@ -1,0 +1,8 @@
+{
+  "name": "Mizan POS — نظام ميزان للكاشير والفوترة الإلكترونية",
+  "description": "نظام كاشير متكامل لإدارة المخزون وإصدار الفواتير الإلكترونية المعتمدة مع محاكاة الربط المباشر بهيئة الزكاة والضريبة والجمارك (ZATCA) وتصدير حزمة Laravel Livewire.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
