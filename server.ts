@@ -1027,8 +1027,12 @@ app.get('/api/laravel-export', async (_req: Request, res: Response) => {
 
 async function startServer(): Promise<void> {
   const port = Number(process.env.PORT) || 3000;
+  const isCompiledEntry =
+    import.meta.url.endsWith('/server.js') ||
+    path.basename(process.argv[1] || '') === 'server.js';
+  const isProduction = process.env.NODE_ENV === 'production' || isCompiledEntry;
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
