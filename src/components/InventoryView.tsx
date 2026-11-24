@@ -9,6 +9,8 @@ interface InventoryViewProps {
   products: Product[];
   movements: StockMovement[];
   pageSize?: number;
+  /** False for users without cost permission: cost column and stock value are hidden (D11). */
+  canViewCost: boolean;
   onCreateProduct: (payload: Record<string, unknown>) => Promise<void>;
   onUpdateProduct: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onStockMovement: (payload: {
@@ -24,6 +26,7 @@ export function InventoryView({
   products,
   movements,
   pageSize = 10,
+  canViewCost,
   onCreateProduct,
   onUpdateProduct,
   onStockMovement,
@@ -61,7 +64,7 @@ export function InventoryView({
   const stats = useMemo(() => {
     const totalSkus = products.length;
     const stockCostValue = products.reduce(
-      (sum, p) => sum + p.cost_price * p.stock_qty,
+      (sum, p) => sum + (p.cost_price ?? 0) * p.stock_qty,
       0
     );
     const lowCount = products.filter(
@@ -126,7 +129,7 @@ export function InventoryView({
       category_en: p.category_en,
       unit_ar: p.unit_ar,
       unit_en: p.unit_en,
-      cost_price: String(p.cost_price),
+      cost_price: String(p.cost_price ?? ''),
       sell_price: String(p.sell_price),
       tax_rate: String(p.tax_rate),
       stock_qty: String(p.stock_qty),
@@ -191,19 +194,25 @@ export function InventoryView({
       </div>
 
       {/* Clean Single-Elevation KPI Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y lg:divide-y-0 lg:divide-x lg:rtl:divide-x-reverse divide-slate-200 dark:divide-slate-800">
+      <div
+        className={`grid grid-cols-2 ${
+          canViewCost ? 'lg:grid-cols-4' : 'lg:grid-cols-3'
+        } bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y lg:divide-y-0 lg:divide-x lg:rtl:divide-x-reverse divide-slate-200 dark:divide-slate-800`}
+      >
         <div className="p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">{t.totalSkus}</div>
           <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
             {stats.totalSkus}
           </div>
         </div>
-        <div className="p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">{t.inventoryValue}</div>
-          <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
-            {formatMoney(stats.stockCostValue, lang)}
+        {canViewCost && (
+          <div className="p-4">
+            <div className="text-xs text-slate-500 dark:text-slate-400">{t.inventoryValue}</div>
+            <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
+              {formatMoney(stats.stockCostValue, lang)}
+            </div>
           </div>
-        </div>
+        )}
         <div className="p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">{t.lowStockCount}</div>
           <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 mt-1 tabular-nums">
@@ -287,7 +296,7 @@ export function InventoryView({
                 <th className="py-3 px-4 text-start font-medium">{t.skuCol}</th>
                 <th className="py-3 px-4 text-start font-medium">{t.productCol}</th>
                 <th className="py-3 px-4 text-start font-medium">{t.categoryCol}</th>
-                <th className="py-3 px-4 text-end font-medium">{t.costCol}</th>
+                {canViewCost && <th className="py-3 px-4 text-end font-medium">{t.costCol}</th>}
                 <th className="py-3 px-4 text-end font-medium">{t.priceCol}</th>
                 <th className="py-3 px-4 text-end font-medium">{t.stockCol}</th>
                 <th className="py-3 px-4 text-start font-medium">{t.statusCol}</th>
@@ -297,7 +306,7 @@ export function InventoryView({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {catalogPagination.pagedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-slate-400">
+                  <td colSpan={canViewCost ? 8 : 7} className="py-10 text-center text-slate-400">
                     {isAr ? 'لا توجد أصناف مطابقة للبحث' : 'No matching products found'}
                   </td>
                 </tr>
@@ -328,9 +337,11 @@ export function InventoryView({
                     <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
                       {isAr ? p.category_ar : p.category_en}
                     </td>
-                    <td className="py-3 px-4 text-end font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                      {p.cost_price.toFixed(2)}
-                    </td>
+                    {canViewCost && (
+                      <td className="py-3 px-4 text-end font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                        {(p.cost_price ?? 0).toFixed(2)}
+                      </td>
+                    )}
                     <td className="py-3 px-4 text-end font-mono font-semibold tabular-nums text-slate-900 dark:text-white">
                       {priceIncl.toFixed(2)}
                     </td>

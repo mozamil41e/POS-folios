@@ -26,17 +26,19 @@ export interface OrganizationSettings {
   auto_print_receipt: number;
   font_size: FontSizeLevel;
   table_page_size: number;
+  // ZATCA credentials: only sent to zatca.manage holders (removed with ZATCA in R1.4).
   ccsid_token: string;
-  ccsid_secret: string;
   ccsid_request_id: string;
   pcsid_token: string;
-  pcsid_secret: string;
-  private_key_pem: string;
   public_key_base64: string;
   csr_pem: string;
+  last_pih: string;
+  // Secrets: server-side only — never included in any API response (R1.3).
+  ccsid_secret?: string;
+  pcsid_secret?: string;
+  private_key_pem?: string;
   onboarding_step: number;
   last_icv: number;
-  last_pih: string;
 }
 
 export interface Product {
@@ -48,7 +50,8 @@ export interface Product {
   category_en: string;
   unit_ar: string;
   unit_en: string;
-  cost_price: number;
+  /** Omitted by the server for users without cost permission (COST_VIEW_PERMISSIONS). */
+  cost_price?: number;
   sell_price: number;
   tax_rate: number;
   tax_category: 'S' | 'Z' | 'E';
@@ -274,16 +277,19 @@ export interface AuthUser {
   created_at: string;
 }
 
+// Every list is optional: the server only sends what the user may read
+// (DATA_VISIBILITY in permissions.ts). Product cost_price is also omitted for
+// users without cost permission. Pass `?? []` when handing lists to screens.
 export interface BootstrapPayload {
   settings: OrganizationSettings;
-  products: Product[];
-  customers: Customer[];
-  suppliers: Supplier[];
-  purchases: Purchase[];
-  invoices: Invoice[];
-  movements: StockMovement[];
-  heldCarts: HeldCart[];
-  vouchers: Voucher[];
+  products?: Product[];
+  customers?: Customer[];
+  suppliers?: Supplier[];
+  purchases?: Purchase[];
+  invoices?: Invoice[];
+  movements?: StockMovement[];
+  heldCarts?: HeldCart[];
+  vouchers?: Voucher[];
   users?: ManagedUser[];
   roles?: RoleRecord[];
 }

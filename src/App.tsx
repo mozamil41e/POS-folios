@@ -17,7 +17,7 @@ import type {
   VoucherType,
 } from './types';
 import { translations } from './i18n';
-import { hasAnyPermission, hasPermission } from './permissions';
+import { canViewCost, hasAnyPermission, hasPermission } from './permissions';
 import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
 import { SalesView } from './components/SalesView';
@@ -1076,9 +1076,9 @@ function PosWorkspace({
             {section === 'pos' && (
               <PosTerminalView
                 lang={lang}
-                products={data.products}
-                customers={data.customers}
-                heldCarts={data.heldCarts}
+                products={data.products ?? []}
+                customers={data.customers ?? []}
+                heldCarts={data.heldCarts ?? []}
                 zatcaEnabled={zatcaEnabled}
                 isFullscreen={isSellOnlyFullscreen}
                 onToggleFullscreen={togglePosFullscreen}
@@ -1094,9 +1094,10 @@ function PosWorkspace({
               <SalesView
                 lang={lang}
                 settings={data.settings}
-                products={data.products}
-                customers={data.customers}
-                invoices={data.invoices}
+                products={data.products ?? []}
+                customers={data.customers ?? []}
+                invoices={data.invoices ?? []}
+                canViewCost={canViewCost(authUser)}
                 onCreateSale={handleCheckout}
                 onCreditNote={handleCreditNote}
                 onCreateCustomer={handleCreateCustomer}
@@ -1112,9 +1113,10 @@ function PosWorkspace({
             {section === 'inventory' && (
               <InventoryView
                 lang={lang}
-                products={data.products}
-                movements={data.movements}
+                products={data.products ?? []}
+                movements={data.movements ?? []}
                 pageSize={data.settings.table_page_size || 10}
+                canViewCost={canViewCost(authUser)}
                 onCreateProduct={handleCreateProduct}
                 onUpdateProduct={handleUpdateProduct}
                 onStockMovement={handleStockMovement}
@@ -1124,9 +1126,9 @@ function PosWorkspace({
             {section === 'purchases' && (
               <PurchasesView
                 lang={lang}
-                products={data.products}
-                suppliers={data.suppliers}
-                purchases={data.purchases}
+                products={data.products ?? []}
+                suppliers={data.suppliers ?? []}
+                purchases={data.purchases ?? []}
                 pageSize={data.settings.table_page_size || 10}
                 onCreatePurchase={handleCreatePurchase}
                 onPayPurchase={handlePayPurchase}
@@ -1142,12 +1144,12 @@ function PosWorkspace({
                 requestedTab={requestedSubTab}
                 onRequestedTabHandled={() => setRequestedSubTab(undefined)}
                 settings={data.settings}
-                invoices={data.invoices}
-                products={data.products}
-                customers={data.customers}
-                suppliers={data.suppliers}
-                purchases={data.purchases}
-                movements={data.movements}
+                invoices={data.invoices ?? []}
+                products={data.products ?? []}
+                customers={data.customers ?? []}
+                suppliers={data.suppliers ?? []}
+                purchases={data.purchases ?? []}
+                movements={data.movements ?? []}
                 vouchers={data.vouchers ?? []}
                 users={data.users ?? []}
                 roles={data.roles ?? []}
@@ -1170,7 +1172,7 @@ function PosWorkspace({
                 lang={lang}
                 authToken={authToken}
                 settings={data.settings}
-                invoices={data.invoices}
+                invoices={data.invoices ?? []}
                 onUpdateSettings={handleUpdateSettings}
                 onGenerateKeys={handleGenerateKeys}
                 onOnboardStep={handleOnboardStep}

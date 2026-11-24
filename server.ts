@@ -37,7 +37,13 @@ import {
   generateEgsKeyPair,
   signXmlAndBuildQr,
 } from './src/server/zatca.ts';
-import { ALL_PERMISSION_KEYS, sanitizePermissions } from './src/permissions.ts';
+import {
+  ALL_PERMISSION_KEYS,
+  canViewData,
+  sanitizePermissions,
+  type VisibleDataKey,
+} from './src/permissions.ts';
+import { scopeForUser } from './src/server/visibility.ts';
 import type {
   AuthUser,
   FontSizeLevel,
@@ -251,6 +257,13 @@ function requirePermission(permission: PermissionKey) {
   };
 }
 
+// Every authenticated response that carries workspace data (lists, settings)
+// goes through the read-scope filter (R1.3): no unreadable lists, no secrets,
+// no cost prices for users without cost permission.
+function sendScoped(res: Response, payload: Record<string, unknown>): void {
+  res.json(scopeForUser(res.locals.authUser as AuthUser, payload));
+}
+
 app.get('/api/auth/me', (_req: Request, res: Response) => {
   res.json({ user: res.locals.authUser });
 });
@@ -261,22 +274,25 @@ app.post('/api/auth/logout', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// Bootstrap entire workspace state
+// Bootstrap the workspace — only the data this user may read (R1.3).
 app.get('/api/bootstrap', (_req: Request, res: Response) => {
   const authUser = res.locals.authUser as AuthUser;
+  const can = (key: VisibleDataKey) => canViewData(authUser, key);
   const canManageUsers = authUser.permissions.includes('users.manage');
-  res.json({
-    settings: getOrganizationSettings(),
-    products: getAllProducts(),
-    customers: getAllCustomers(),
-    suppliers: getAllSuppliers(),
-    purchases: getAllPurchases(),
-    invoices: getAllInvoices(),
-    movements: getRecentMovements(80),
-    heldCarts: getHeldCarts(),
-    vouchers: getAllVouchers(),
-    ...(canManageUsers ? { users: getAllUsers(), roles: getAllRoles() } : {}),
-  });
+  res.json(
+    scopeForUser(authUser, {
+      settings: getOrganizationSettings(),
+      products: can('products') ? getAllProducts() : undefined,
+      customers: can('customers') ? getAllCustomers() : undefined,
+      suppliers: can('suppliers') ? getAllSuppliers() : undefined,
+      purchases: can('purchases') ? getAllPurchases() : undefined,
+      invoices: can('invoices') ? getAllInvoices() : undefined,
+      movements: can('movements') ? getRecentMovements(80) : undefined,
+      heldCarts: can('heldCarts') ? getHeldCarts() : undefined,
+      vouchers: can('vouchers') ? getAllVouchers() : undefined,
+      ...(canManageUsers ? { users: getAllUsers(), roles: getAllRoles() } : {}),
+    })
+  );
 });
 
 // Users & Roles Management (RBAC)
@@ -742,7 +758,7 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
     tablePageSize
   );
 
-  res.json({ settings: getOrganizationSettings() });
+  sendScoped(res, { settings: getOrganizationSettings() });
 });
 
 // Generate real secp256k1 ECDSA keypair + ZATCA CSR
@@ -762,7 +778,7 @@ app.post('/api/zatca/generate-keys', requirePermission('zatca.manage'), (_req: R
     WHERE id = 1
   `).run(keys.privateKeyPem, keys.publicKeyBase64, keys.csrPem, nextStep);
 
-  res.json({
+  sendScoped(res, {
     settings: getOrganizationSettings(),
     message: 'Generated ECDSA secp256k1 keypair and ZATCA CSR.',
   });
@@ -822,7 +838,7 @@ app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Re
           String(data.secret ?? ''),
           String(data.requestID ?? ''),
         );
-        res.json({ settings: getOrganizationSettings(), apiResponse: data });
+        sendScoped(res, { settings: getOrganizationSettings(), apiResponse: data });
         return;
       } catch (err) {
         res.status(502).json({
@@ -846,7 +862,7 @@ app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Re
       WHERE id = 1
     `).run(simToken, simSecret, simReqId);
 
-    res.json({
+    sendScoped(res, {
       settings: getOrganizationSettings(),
       apiResponse: {
         requestID: simReqId,
@@ -864,7 +880,7 @@ app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Re
     }
 
     db.prepare('UPDATE organization_settings SET onboarding_step = 3 WHERE id = 1').run();
-    res.json({
+    sendScoped(res, {
       settings: getOrganizationSettings(),
       checks: [
         { type: 'Standard Tax Invoice (B2B 388)', status: 'PASS' },
@@ -916,7 +932,7 @@ app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Re
           SET pcsid_token = ?, pcsid_secret = ?, onboarding_step = 4
           WHERE id = 1
         `).run(String(data.binarySecurityToken ?? ''), String(data.secret ?? ''));
-        res.json({ settings: getOrganizationSettings(), apiResponse: data });
+        sendScoped(res, { settings: getOrganizationSettings(), apiResponse: data });
         return;
       } catch (err) {
         res.status(502).json({
@@ -937,7 +953,7 @@ app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Re
       WHERE id = 1
     `).run(simPcsid, simPcsidSecret);
 
-    res.json({
+    sendScoped(res, {
       settings: getOrganizationSettings(),
       apiResponse: {
         dispositionMessage: 'ISSUED',
@@ -1026,7 +1042,7 @@ app.post('/api/products', requirePermission('inventory.manage'), (req: Request, 
 
     const id = createTx();
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
-    res.status(201).json({
+    sendScoped(res.status(201), {
       product,
       products: getAllProducts(),
       movements: getRecentMovements(80),
@@ -1075,13 +1091,13 @@ app.put('/api/products/:id', requirePermission('inventory.manage'), (req: Reques
     id
   );
 
-  res.json({ products: getAllProducts() });
+  sendScoped(res, { products: getAllProducts() });
 });
 
 app.delete('/api/products/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(id);
-  res.json({ products: getAllProducts() });
+  sendScoped(res, { products: getAllProducts() });
 });
 
 // Inventory movement (purchase / adjustment / return)
@@ -1122,7 +1138,7 @@ app.post('/api/inventory/movement', requirePermission('inventory.adjust'), (req:
     });
 
     moveTx();
-    res.json({
+    sendScoped(res, {
       products: getAllProducts(),
       movements: getRecentMovements(80),
     });
@@ -1344,7 +1360,7 @@ app.post('/api/purchases', requirePermission('purchases.manage'), (req: Request,
 
     const purchaseId = createPurchaseTx();
     const purchases = getAllPurchases();
-    res.status(201).json({
+    sendScoped(res.status(201), {
       purchase: purchases.find((p) => p.id === purchaseId),
       purchases,
       products: getAllProducts(),
@@ -1383,7 +1399,7 @@ app.post('/api/purchases/:id/pay', requirePermission('purchases.manage'), (req: 
     id
   );
 
-  res.json({ purchases: getAllPurchases() });
+  sendScoped(res, { purchases: getAllPurchases() });
 });
 
 // Customers CRUD for B2B
@@ -1751,7 +1767,7 @@ app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, 
     const invoices = getAllInvoices();
     const createdInvoice = invoices.find((i) => i.id === result.invoiceId);
 
-    res.status(201).json({
+    sendScoped(res.status(201), {
       invoice: createdInvoice,
       settings: getOrganizationSettings(),
       products: getAllProducts(),
@@ -1794,7 +1810,7 @@ app.post('/api/invoices/:id/retry', requirePermission('zatca.manage'), async (re
     WHERE id = ?
   `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), id);
 
-  res.json({
+  sendScoped(res, {
     invoices: getAllInvoices(),
   });
 });
@@ -1994,7 +2010,7 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
   }
 
   const invoices = getAllInvoices();
-  res.status(201).json({
+  sendScoped(res.status(201), {
     invoice: invoices.find((i) => i.id === result.invoiceId),
     settings: getOrganizationSettings(),
     products: getAllProducts(),

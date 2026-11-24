@@ -748,8 +748,8 @@ function seedInitialSuppliersAndPurchases(): void {
   if (products.length >= 4) {
     const p1Date = new Date(Date.now() - 86_400_000 * 2).toISOString();
     const p1Items = [
-      { prod: products[0], qty: 24, cost: products[0].cost_price },
-      { prod: products[7], qty: 18, cost: products[7].cost_price },
+      { prod: products[0], qty: 24, cost: products[0].cost_price ?? 0 },
+      { prod: products[7], qty: 18, cost: products[7].cost_price ?? 0 },
     ];
     const p1Sub = Number(p1Items.reduce((s, i) => s + i.qty * i.cost, 0).toFixed(2));
     const p1Vat = Number((p1Sub * 0.15).toFixed(2));
@@ -791,8 +791,8 @@ function seedInitialSuppliersAndPurchases(): void {
 
     const p2Date = new Date(Date.now() - 86_400_000).toISOString();
     const p2Items = [
-      { prod: products[1], qty: 20, cost: products[1].cost_price },
-      { prod: products[10], qty: 30, cost: products[10].cost_price },
+      { prod: products[1], qty: 20, cost: products[1].cost_price ?? 0 },
+      { prod: products[10], qty: 30, cost: products[10].cost_price ?? 0 },
     ];
     const p2Sub = Number(p2Items.reduce((s, i) => s + i.qty * i.cost, 0).toFixed(2));
     const p2Vat = Number((p2Sub * 0.15).toFixed(2));

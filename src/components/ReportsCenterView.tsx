@@ -432,7 +432,7 @@ export function ReportsCenterView({
     const calcInvoiceCogs = (inv: Invoice): number =>
       (inv.items ?? []).reduce((sum, item) => {
         const prod = productMap.get(item.product_id);
-        return sum + (prod ? prod.cost_price : 0) * item.qty;
+        return sum + (prod?.cost_price ?? 0) * item.qty;
       }, 0);
 
     const grossSalesSub = scopedSales.reduce((s, i) => s + i.subtotal, 0);
@@ -481,7 +481,7 @@ export function ReportsCenterView({
       cardInSales - cardOutReturns + bankInVouchers - bankOutVouchers - purchasesPaid;
 
     const inventoryCostValue = products.reduce(
-      (s, p) => s + p.cost_price * Math.max(0, p.stock_qty),
+      (s, p) => s + (p.cost_price ?? 0) * Math.max(0, p.stock_qty),
       0
     );
     const inventoryRetailValue = products.reduce(
@@ -1446,8 +1446,8 @@ export function ReportsCenterView({
               category: isAr ? p.category_ar : p.category_en,
               unit: isAr ? p.unit_ar : p.unit_en,
               qty: String(p.stock_qty),
-              cost: num(p.cost_price),
-              costVal: num(p.cost_price * p.stock_qty),
+              cost: num(p.cost_price ?? 0),
+              costVal: num((p.cost_price ?? 0) * p.stock_qty),
               expiry: p.expiry_date || '—',
             },
           })),
@@ -1605,7 +1605,7 @@ export function ReportsCenterView({
 
         const expiredCount = withExpiry.filter((x) => x.daysLeft <= 0).length;
         const criticalCount = withExpiry.filter((x) => x.daysLeft > 0 && x.daysLeft <= 14).length;
-        const atRiskValue = withExpiry.reduce((s, x) => s + x.p.stock_qty * x.p.cost_price, 0);
+        const atRiskValue = withExpiry.reduce((s, x) => s + x.p.stock_qty * (x.p.cost_price ?? 0), 0);
 
         return {
           title: isAr ? 'تقرير أصناف قرب انتهاء صلاحيتها' : 'Products Nearing Expiry Report',
@@ -1641,7 +1641,7 @@ export function ReportsCenterView({
               expiry: p.expiry_date || '—',
               days: String(daysLeft),
               qty: String(p.stock_qty),
-              value: num(p.stock_qty * p.cost_price),
+              value: num(p.stock_qty * (p.cost_price ?? 0)),
               status:
                 daysLeft <= 0
                   ? isAr
@@ -1680,7 +1680,7 @@ export function ReportsCenterView({
           .filter((p) => p.stock_qty > 0 && (soldQtyByProduct.get(p.id) ?? 0) <= 2)
           .map((p) => {
             const sold = soldQtyByProduct.get(p.id) ?? 0;
-            const tiedCapital = p.stock_qty * p.cost_price;
+            const tiedCapital = p.stock_qty * (p.cost_price ?? 0);
             return {
               p,
               sold,
@@ -1753,7 +1753,7 @@ export function ReportsCenterView({
         const lowItems = products.filter((p) => p.stock_qty <= p.min_stock_alert);
         const outCount = lowItems.filter((p) => p.stock_qty <= 0).length;
         const reorderCost = lowItems.reduce(
-          (s, p) => s + Math.max(0, p.min_stock_alert * 2 - p.stock_qty) * p.cost_price,
+          (s, p) => s + Math.max(0, p.min_stock_alert * 2 - p.stock_qty) * (p.cost_price ?? 0),
           0
         );
         return {
@@ -2053,7 +2053,7 @@ export function ReportsCenterView({
             };
             prev.qty += item.qty * sign;
             prev.revenue += item.line_subtotal * sign;
-            prev.cogs += (prod ? prod.cost_price : 0) * item.qty * sign;
+            prev.cogs += (prod?.cost_price ?? 0) * item.qty * sign;
             itemMap.set(item.sku, prev);
           }
         }

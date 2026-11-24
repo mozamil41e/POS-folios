@@ -51,7 +51,7 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 
 | Layer | Current | Target (see ARCHITECTURE) |
 |---|---|---|
-| Language | TypeScript ^7 (not `strict`) | TypeScript `strict` |
+| Language | TypeScript ^7. `strict` is on by default in TS 7 (tsconfig doesn't set it explicitly); the code passes with 0 errors | Keep 0 errors; set `"strict": true` explicitly (R1.11) |
 | Frontend | React 19, Vite 8, Tailwind 4, lucide-react, qrcode | + React Router, TanStack Query, shared UI kit, typed i18n |
 | Backend | Express ^4.21 in a single `server.ts` | Express 5 modular monolith (`server/src/modules/*`) |
 | Validation | Manual `String(b.x ?? '')` checks | zod schemas in `shared/schemas` |
@@ -91,14 +91,13 @@ Do not assume that the target structure exists yet.
 - Data flow:
   1. login
   2. the token is kept in memory
-  3. `GET /api/bootstrap` returns everything
+  3. `GET /api/bootstrap` returns every list the role may read (scoped since R1.3)
   4. every mutation returns full replacement lists
   5. `setData` merges them
 
 **Known critical issues** (fix before any production use; see docs):
-- open registration (fixed in R1.2 on branch `r1/close-registration`; first-run setup needs `SETUP_TOKEN` in production)
-- read permissions not enforced on the server
-- secrets inside `/api/bootstrap`
+- open registration (fixed in R1.2, deployed; first-run setup needs `SETUP_TOKEN` in production)
+- read permissions and secrets in responses (fixed in R1.3 on branch `r1/read-permissions`): all workspace responses go through `scopeForUser` (`src/server/visibility.ts`), using the rules in `src/permissions.ts`
 - reports computed from `LIMIT 100` data
 - SQLite would be wiped on every Hostinger deploy
 - a failed checkout clears the cart
@@ -131,15 +130,18 @@ These facts come from Hostinger's support pages. Design around them:
 - **No inbound WebSockets, no background workers, no endless timers, no custom ports, no Docker, no Redis.**
 - Each request is cut off after **120 s**. Keep every request short and do reporting work in SQL.
 - Periodic work runs as **hPanel cron jobs**: small `node` scripts, UTC schedule, at most 30 minutes each.
-- GitHub auto-deploy; npm install and build run on Hostinger. Env vars are managed in hPanel. Entry file: `server.js`.
+- GitHub auto-deploy from **`main`** (confirmed from the build log on 2026-11-24): **every push to `main` is a production deploy**.
+  - Hostinger runs Node 22, `npm install` (npm 10, devDependencies included), then `npm run build`. Entry file: `server.js`. Application type: Express.
+  - If `npm install` fails, Hostinger retries with `--legacy-peer-deps`.
+  - Env vars are managed in hPanel (`SETUP_TOKEN` is set). There is no `.env` file.
 - Resources: 2 CPU, 3 GB RAM, NPROC 120. A single Node process serves both the SPA and the API (same origin).
-- Still to verify during R8.1: whether SSH is available, the localhost MariaDB connection, whether devDependencies are installed during the build, whether `mysqldump` works in cron, and proxy/`trust proxy` behaviour.
+- Still to verify during R8.1: whether SSH is available, the localhost MariaDB connection, whether `mysqldump` works in cron, and proxy/`trust proxy` behaviour.
 
 ---
 
 ## 8. Coding Standards
 
-- TypeScript everywhere. Move toward `strict: true`. Avoid `as` casts: parse with zod instead. Never use `any` in new code.
+- TypeScript everywhere, in strict mode (the TS 7 default). `npm run typecheck` must stay at 0 errors. Avoid `as` casts: parse with zod instead. Never use `any` in new code.
 - **Business logic lives on the server only**: prices, VAT, discounts, stock, costing, document numbers, reports. The UI may show estimates, but the server is authoritative.
 - Money:
   - use the helpers in `shared/money.ts` (one rounding rule: half-up to 2 decimals);

@@ -18,7 +18,7 @@
 
 | الفحص | النتيجة |
 |---|---|
-| `tsc --noEmit` (TypeScript 7، غير strict) | ✅ **0 أخطاء** |
+| `tsc --noEmit` (TypeScript 7 — وضع strict مفعّل افتراضياً رغم عدم تحديده في tsconfig؛ تأكد في R1.3) | ✅ **0 أخطاء** |
 | `npm run build` | ✅ ينجح: `dist/assets/index-*.js` **601 KB** (gzip 151 KB — تحذير حجم > 500 KB)، CSS 49.5 KB، `server.js` 133.7 KB |
 | تشغيل الإنتاج `node server.js` | ✅ `/api/auth/status` يعمل، الواجهة 200، `/api/bootstrap` بلا توكن 401 |
 | تحذير Vite | `vite.config.ts:22` يستخدم `__dirname` (سيُحتاج `import.meta.dirname` مستقبلاً) — لا أثر حالياً |

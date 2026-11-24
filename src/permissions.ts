@@ -189,6 +189,50 @@ export function sanitizePermissions(input: unknown): PermissionKey[] {
   return Array.from(unique);
 }
 
+/**
+ * Read access to workspace data (R1.3, SEC-02). The server only sends a list to
+ * users holding at least one of these permissions; the UI hiding a screen is
+ * not access control. Keep this in sync with what each screen needs.
+ */
+export const DATA_VISIBILITY = {
+  products: [
+    'pos.access',
+    'sales.view',
+    'sales.return',
+    'inventory.view',
+    'inventory.manage',
+    'inventory.adjust',
+    'purchases.view',
+    'purchases.manage',
+    'reports.view',
+  ],
+  customers: ['pos.access', 'sales.view', 'sales.return', 'customers.manage', 'reports.view'],
+  invoices: ['sales.view', 'sales.return', 'reports.view', 'zatca.manage'],
+  movements: ['inventory.view', 'inventory.manage', 'inventory.adjust', 'reports.view'],
+  suppliers: ['purchases.view', 'purchases.manage', 'reports.view'],
+  purchases: ['purchases.view', 'purchases.manage', 'reports.view'],
+  vouchers: ['vouchers.manage', 'reports.view'],
+  heldCarts: ['pos.hold'],
+} as const satisfies Record<string, readonly PermissionKey[]>;
+
+export type VisibleDataKey = keyof typeof DATA_VISIBILITY;
+
+/** Product cost price, and profit derived from it, is hidden from everyone else (D11). */
+export const COST_VIEW_PERMISSIONS: readonly PermissionKey[] = [
+  'inventory.manage',
+  'purchases.view',
+  'purchases.manage',
+  'reports.view',
+];
+
+export function canViewData(user: AuthUser | null | undefined, key: VisibleDataKey): boolean {
+  return hasAnyPermission(user, [...DATA_VISIBILITY[key]]);
+}
+
+export function canViewCost(user: AuthUser | null | undefined): boolean {
+  return hasAnyPermission(user, [...COST_VIEW_PERMISSIONS]);
+}
+
 export function hasPermission(user: AuthUser | null | undefined, perm: PermissionKey): boolean {
   if (!user || user.is_active === 0) return false;
   return Array.isArray(user.permissions) && user.permissions.includes(perm);

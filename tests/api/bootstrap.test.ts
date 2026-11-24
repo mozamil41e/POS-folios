@@ -36,23 +36,36 @@ describe('GET /api/bootstrap (characterization)', () => {
     expect(body.users).toHaveLength(2);
   });
 
-  // CURRENT BEHAVIOUR (SEC-02): read permissions are not enforced on the server.
-  // R1.3 filters the payload by permission — flip these expectations then.
-  it('CURRENT BEHAVIOUR: gives a cashier purchases, suppliers and vouchers as well', async () => {
+  // SEC-02 fixed in R1.3: the server only sends what the role may read.
+  it('gives a cashier only POS, sales and stock data — no purchases, suppliers, vouchers or costs', async () => {
     const body = await getBootstrap(t.app, cashierToken);
-    expect(body.purchases.length).toBeGreaterThan(0);
-    expect(body.suppliers.length).toBeGreaterThan(0);
-    expect(body.vouchers.length).toBeGreaterThan(0);
-    expect(body.products[0]).toHaveProperty('cost_price');
-    expect(body).not.toHaveProperty('users');
-    expect(body).not.toHaveProperty('roles');
+    expect(Object.keys(body).sort()).toEqual(
+      ['customers', 'heldCarts', 'invoices', 'movements', 'products', 'settings'].sort()
+    );
+    expect(body.products.length).toBe(14);
+    for (const product of body.products) {
+      expect(product).not.toHaveProperty('cost_price');
+    }
   });
 
-  // CURRENT BEHAVIOUR (SEC-03): settings are SELECT * and include ZATCA secrets.
-  // R1.3 (public settings DTO) and R1.4 (ZATCA removal) make this go away.
-  it('CURRENT BEHAVIOUR: exposes ZATCA secrets in settings to every role', async () => {
-    const body = await getBootstrap(t.app, cashierToken);
-    expect(body.settings.private_key_pem).toContain('PRIVATE KEY');
-    expect(body.settings.pcsid_secret).not.toBe('');
+  // SEC-03 fixed in R1.3: settings never carry secrets; ZATCA credentials only
+  // reach zatca.manage holders (until ZATCA is removed in R1.4).
+  it('never sends secrets in settings, to any role', async () => {
+    for (const token of [adminToken, cashierToken]) {
+      const { settings } = await getBootstrap(t.app, token);
+      expect(settings).not.toHaveProperty('private_key_pem');
+      expect(settings).not.toHaveProperty('ccsid_secret');
+      expect(settings).not.toHaveProperty('pcsid_secret');
+      expect(settings).toHaveProperty('name_ar');
+      expect(settings).toHaveProperty('vat_number');
+    }
+
+    const cashierSettings = (await getBootstrap(t.app, cashierToken)).settings;
+    expect(cashierSettings).not.toHaveProperty('ccsid_token');
+    expect(cashierSettings).not.toHaveProperty('pcsid_token');
+    expect(cashierSettings).not.toHaveProperty('csr_pem');
+
+    const adminSettings = (await getBootstrap(t.app, adminToken)).settings;
+    expect(adminSettings).toHaveProperty('pcsid_token');
   });
 });

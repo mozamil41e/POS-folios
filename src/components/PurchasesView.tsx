@@ -181,7 +181,7 @@ export function PurchasesView({
           name_ar: prod.name_ar,
           name_en: prod.name_en,
           qty: 10,
-          unit_cost: prod.cost_price,
+          unit_cost: prod.cost_price ?? 0,
           tax_rate: prod.tax_rate,
         },
       ];

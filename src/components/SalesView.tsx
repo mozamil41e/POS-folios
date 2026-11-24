@@ -64,6 +64,8 @@ interface SalesViewProps {
   ) => Promise<void>;
   onOpenReceipt: (invoice: Invoice) => void;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
+  /** False for users without cost permission: cost, profit and margin are hidden (D11). */
+  canViewCost: boolean;
 }
 
 interface DraftSaleLine {
@@ -92,6 +94,7 @@ export function SalesView({
   onUpdateCustomer,
   onOpenReceipt,
   onNotify,
+  canViewCost,
 }: SalesViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
@@ -137,7 +140,8 @@ export function SalesView({
   const productCostMap = useMemo(() => {
     const map = new Map<number, number>();
     for (const p of products) {
-      map.set(p.id, p.cost_price);
+      // cost_price is absent for users without cost permission; profit is hidden for them.
+      map.set(p.id, p.cost_price ?? 0);
     }
     return map;
   }, [products]);
@@ -452,7 +456,7 @@ export function SalesView({
           name_en: prod.name_en,
           qty: 1,
           sell_price: prod.sell_price,
-          cost_price: prod.cost_price,
+          cost_price: prod.cost_price ?? 0,
           tax_rate: prod.tax_rate,
           max_stock: prod.stock_qty,
         },
@@ -593,7 +597,11 @@ export function SalesView({
       </div>
 
       {/* KPI Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y lg:divide-y-0 lg:divide-x lg:rtl:divide-x-reverse divide-slate-200 dark:divide-slate-800">
+      <div
+        className={`grid grid-cols-2 ${
+          canViewCost ? 'lg:grid-cols-4' : 'lg:grid-cols-3'
+        } bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y lg:divide-y-0 lg:divide-x lg:rtl:divide-x-reverse divide-slate-200 dark:divide-slate-800`}
+      >
         <div className="p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">{t.netSalesMetric}</div>
           <div className="text-2xl font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-1 tabular-nums">
@@ -605,15 +613,17 @@ export function SalesView({
           </div>
         </div>
 
-        <div className="p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">{t.grossProfitMetric}</div>
-          <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
-            {formatMoney(metrics.grossProfit, lang)}
+        {canViewCost && (
+          <div className="p-4">
+            <div className="text-xs text-slate-500 dark:text-slate-400">{t.grossProfitMetric}</div>
+            <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
+              {formatMoney(metrics.grossProfit, lang)}
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
+              {isAr ? `هامش الربح: ${metrics.profitMargin}%` : `Margin: ${metrics.profitMargin}%`}
+            </div>
           </div>
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
-            {isAr ? `هامش الربح: ${metrics.profitMargin}%` : `Margin: ${metrics.profitMargin}%`}
-          </div>
-        </div>
+        )}
 
         <div className="p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">{t.cashVsCardMetric}</div>
@@ -1031,9 +1041,13 @@ export function SalesView({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
             <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                {isAr
-                  ? 'الأصناف الأكثر مبيعاً وربحية (صافي بعد المرتجعات)'
-                  : 'Top Selling Products & Gross Margins'}
+                {canViewCost
+                  ? isAr
+                    ? 'الأصناف الأكثر مبيعاً وربحية (صافي بعد المرتجعات)'
+                    : 'Top Selling Products & Gross Margins'
+                  : isAr
+                  ? 'الأصناف الأكثر مبيعاً (صافي بعد المرتجعات)'
+                  : 'Top Selling Products'}
               </h2>
               <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
                 {analytics.topProducts.length} {isAr ? 'صنف' : 'SKUs'}
@@ -1050,21 +1064,25 @@ export function SalesView({
                   <th className="py-3 px-4 text-end font-medium">
                     {isAr ? 'المبيعات (قبل الضريبة)' : 'Net Revenue'}
                   </th>
-                  <th className="py-3 px-4 text-end font-medium">
-                    {isAr ? 'تكلفة البضاعة' : 'COGS'}
-                  </th>
-                  <th className="py-3 px-4 text-end font-medium">
-                    {isAr ? 'مجمل الربح' : 'Gross Profit'}
-                  </th>
-                  <th className="py-3 px-4 text-end font-medium">
-                    {isAr ? 'الهامش %' : 'Margin %'}
-                  </th>
+                  {canViewCost && (
+                    <>
+                      <th className="py-3 px-4 text-end font-medium">
+                        {isAr ? 'تكلفة البضاعة' : 'COGS'}
+                      </th>
+                      <th className="py-3 px-4 text-end font-medium">
+                        {isAr ? 'مجمل الربح' : 'Gross Profit'}
+                      </th>
+                      <th className="py-3 px-4 text-end font-medium">
+                        {isAr ? 'الهامش %' : 'Margin %'}
+                      </th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {topProductsPagination.pagedItems.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-slate-400">
+                    <td colSpan={canViewCost ? 7 : 4} className="py-10 text-center text-slate-400">
                       {isAr ? 'لا توجد بيانات مبيعات للأصناف بعد' : 'No product sales data yet'}
                     </td>
                   </tr>
@@ -1084,21 +1102,25 @@ export function SalesView({
                       <td className="py-3 px-4 text-end font-mono tabular-nums">
                         {formatMoney(item.netRevenueExVat, lang)}
                       </td>
-                      <td className="py-3 px-4 text-end font-mono tabular-nums text-slate-500">
-                        {formatMoney(item.netCogs, lang)}
-                      </td>
-                      <td
-                        className={`py-3 px-4 text-end font-mono font-bold tabular-nums ${
-                          item.profit >= 0
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-red-600 dark:text-red-400'
-                        }`}
-                      >
-                        {formatMoney(item.profit, lang)}
-                      </td>
-                      <td className="py-3 px-4 text-end font-mono tabular-nums font-semibold">
-                        {item.margin}%
-                      </td>
+                      {canViewCost && (
+                        <>
+                          <td className="py-3 px-4 text-end font-mono tabular-nums text-slate-500">
+                            {formatMoney(item.netCogs, lang)}
+                          </td>
+                          <td
+                            className={`py-3 px-4 text-end font-mono font-bold tabular-nums ${
+                              item.profit >= 0
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-red-600 dark:text-red-400'
+                            }`}
+                          >
+                            {formatMoney(item.profit, lang)}
+                          </td>
+                          <td className="py-3 px-4 text-end font-mono tabular-nums font-semibold">
+                            {item.margin}%
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))
                 )}
@@ -1422,12 +1444,14 @@ export function SalesView({
                 />
               </div>
               <div className="flex flex-wrap items-center gap-4 tabular-nums">
-                <div>
-                  <span className="text-slate-500 me-1">{isAr ? 'الربح:' : 'Profit:'}</span>
-                  <span className="font-mono font-semibold text-slate-900 dark:text-white">
-                    {formatMoney(draftTotals.estProfit, lang)}
-                  </span>
-                </div>
+                {canViewCost && (
+                  <div>
+                    <span className="text-slate-500 me-1">{isAr ? 'الربح:' : 'Profit:'}</span>
+                    <span className="font-mono font-semibold text-slate-900 dark:text-white">
+                      {formatMoney(draftTotals.estProfit, lang)}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <span className="text-slate-500 me-1">{isAr ? 'الضريبة:' : 'VAT:'}</span>
                   <span className="font-mono font-semibold">{formatMoney(draftTotals.vat, lang)}</span>
