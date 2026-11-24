@@ -133,26 +133,65 @@ describe('POST /api/invoices — checkout (characterization)', () => {
     expect(unknown.body.error).toBe('PRODUCT_NOT_FOUND');
   });
 
-  // CURRENT BEHAVIOUR (SEC-09 / H2): the document type comes from the client.
-  // R1.5 restricts this route to sales invoices — flip to expect 400 then.
-  it('CURRENT BEHAVIOUR: accepts a credit-note type (381) and still deducts stock', async () => {
+  // SEC-09 fixed in R1.5: this route only issues sales invoices (388).
+  it('rejects any other document type (credit / debit notes) without touching stock', async () => {
     const before = await stockOf(t.app, adminToken, SEED.water.id);
-    const res = await sell(adminToken, cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_type_code: '381' }));
-    expect(res.status).toBe(201);
-    expect(res.body.invoice.invoice_type_code).toBe('381');
-    expect(res.body.invoice.related_invoice_number).toBeNull();
-    expect(await stockOf(t.app, adminToken, SEED.water.id)).toBe(before - 1);
+    for (const type of ['381', '383']) {
+      const res = await sell(adminToken, cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_type_code: type }));
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_DOCUMENT_TYPE');
+    }
+    expect(await stockOf(t.app, adminToken, SEED.water.id)).toBe(before);
+
+    const explicit388 = await sell(adminToken, cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_type_code: '388' }));
+    expect(explicit388.status).toBe(201);
   });
 
-  // CURRENT BEHAVIOUR (H2): a B2B (standard) invoice is accepted without a buyer.
-  // R1.5 requires a customer for tax invoices — flip to expect 400 then.
-  it('CURRENT BEHAVIOUR: accepts a B2B invoice without a customer', async () => {
+  // H2 fixed in R1.5 + D12: a tax invoice (B2B) needs a registered customer
+  // with a valid 15-digit VAT number.
+  it('rejects a B2B invoice without a customer', async () => {
+    const before = await stockOf(t.app, adminToken, SEED.water.id);
     const res = await sell(
       adminToken,
       cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: '0100000', customer_id: null })
     );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('CUSTOMER_REQUIRED');
+    expect(await stockOf(t.app, adminToken, SEED.water.id)).toBe(before);
+  });
+
+  it('rejects a B2B invoice for a customer without a valid VAT number', async () => {
+    const created = await request(t.app)
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ name_ar: 'شركة بلا رقم ضريبي', name_en: '', vat_number: '12345', cr_number: '', address_ar: '', phone: '' });
+    const res = await sell(
+      adminToken,
+      cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: '0100000', customer_id: created.body.customerId })
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('CUSTOMER_VAT_INVALID');
+  });
+
+  it('issues a B2B invoice for a registered customer with a valid VAT number', async () => {
+    // Seeded customer #1 has VAT 310488291000003.
+    const res = await sell(
+      adminToken,
+      cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: '0100000', customer_id: 1 })
+    );
     expect(res.status).toBe(201);
     expect(res.body.invoice.invoice_subtype).toBe('0100000');
-    expect(res.body.invoice.customer_name).toBe('');
+    expect(res.body.invoice.customer_vat).toBe('310488291000003');
+  });
+
+  it('rejects an unknown customer instead of silently using the cash customer', async () => {
+    for (const subtype of ['0200000', '0100000']) {
+      const res = await sell(
+        adminToken,
+        cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: subtype, customer_id: 999_999 })
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('CUSTOMER_NOT_FOUND');
+    }
   });
 });

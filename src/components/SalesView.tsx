@@ -26,6 +26,7 @@ import type {
 } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
 import { buildPublicInvoiceUrl } from './InvoiceReceiptModal';
+import { isValidVatNumber } from '../validation';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 interface SalesViewProps {
@@ -476,6 +477,19 @@ export function SalesView({
         'error'
       );
       return;
+    }
+    // Same rule as the server (D12): a tax invoice needs a valid customer VAT number.
+    if (saleSubtype === '0100000') {
+      const buyer = customers.find((c) => c.id === Number(saleCustomerId));
+      if (!isValidVatNumber(buyer?.vat_number)) {
+        onNotify(
+          isAr
+            ? 'الفاتورة الضريبية تتطلب رقماً ضريبياً صحيحاً للعميل (15 رقماً يبدأ وينتهي بـ 3)'
+            : 'A tax invoice requires the customer to have a valid 15-digit VAT number (starting and ending with 3)',
+          'error'
+        );
+        return;
+      }
     }
 
     setSubmittingSale(true);

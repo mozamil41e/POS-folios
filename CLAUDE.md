@@ -199,6 +199,8 @@ These facts come from Hostinger's support pages. Design around them:
 
 - Middleware order: `requestId → logger → helmet → json(limit) → requireAuth → csrf → requirePermission(key) → validate(schema) → controller`.
 - **Every route declares a permission**, reads included. The UI hiding something is not access control.
+- Until Express 5 (R2.1), wrap every `async` route in `asyncHandler(...)`. Throw unexpected errors and let the central `errorHandler` answer: JSON 500 `INTERNAL`, no internals. Only known business codes may be returned as 400 (`knownErrorCode`).
+- Once a sale or credit note is committed, never answer with an error. Log any follow-up failure and still return 201 (prevents double sales).
 - Responses:
   - success: `{ "data": … }`
   - lists: `{ "data": [...], "meta": { page, pageSize, total } }`

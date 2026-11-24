@@ -44,6 +44,7 @@ import {
   type VisibleDataKey,
 } from './src/permissions.ts';
 import { scopeForUser } from './src/server/visibility.ts';
+import { isValidVatNumber } from './src/validation.ts';
 import type {
   AuthUser,
   FontSizeLevel,
@@ -66,6 +67,24 @@ initDatabase();
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
+
+// Express 4 does not catch rejected promises from async handlers: an error there
+// would be an unhandled rejection and crash the whole process (R1.5, SEC-08).
+// This forwards it to the central error handler. Express 5 (R2.1) makes it unnecessary.
+type AsyncRoute = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
+const asyncHandler =
+  (fn: AsyncRoute) =>
+  (req: Request, res: Response, next: NextFunction): void => {
+    fn(req, res, next).catch(next);
+  };
+
+// Business errors thrown inside transactions as Error('CODE') or Error('CODE:detail').
+// Only these are reported to the client as 400; anything else is a 500 (R1.5, SEC-10).
+function knownErrorCode(err: unknown, known: ReadonlySet<string>): string | null {
+  if (!(err instanceof Error)) return null;
+  const code = err.message.split(':')[0];
+  return known.has(code) ? code : null;
+}
 
 // Public read-only invoice lookup (used by thermal receipt QR public URL)
 app.get('/api/public/invoices/:uuid', (req: Request, res: Response) => {
@@ -785,7 +804,7 @@ app.post('/api/zatca/generate-keys', requirePermission('zatca.manage'), (_req: R
 });
 
 // Execute ZATCA onboarding steps (CCSID -> Compliance Check -> PCSID)
-app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Request, res: Response) => {
+app.post('/api/zatca/onboard', requirePermission('zatca.manage'), asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const action = String(body.action ?? '');
   const otp = String(body.otp ?? '').trim();
@@ -964,7 +983,7 @@ app.post('/api/zatca/onboard', requirePermission('zatca.manage'), async (req: Re
   }
 
   res.status(400).json({ error: 'Unknown onboarding action.' });
-});
+}));
 
 // Decode TLV Base64 QR code
 app.post('/api/zatca/decode-qr', requirePermission('zatca.manage'), (req: Request, res: Response) => {
@@ -1207,6 +1226,12 @@ app.put('/api/suppliers/:id', requirePermission('purchases.manage'), (req: Reque
   res.json({ suppliers: getAllSuppliers() });
 });
 
+const PURCHASE_ERROR_CODES: ReadonlySet<string> = new Set([
+  'SUPPLIER_NOT_FOUND',
+  'PRODUCT_NOT_FOUND',
+  'INVALID_PURCHASE_LINE',
+]);
+
 app.post('/api/purchases', requirePermission('purchases.manage'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const supplierId = Number(b.supplier_id);
@@ -1367,9 +1392,12 @@ app.post('/api/purchases', requirePermission('purchases.manage'), (req: Request,
       movements: getRecentMovements(80),
     });
   } catch (err) {
-    res.status(400).json({
-      error: err instanceof Error ? err.message : 'Failed to create purchase invoice.',
-    });
+    const code = knownErrorCode(err, PURCHASE_ERROR_CODES);
+    if (code) {
+      res.status(400).json({ error: code, code });
+      return;
+    }
+    throw err; // unexpected: central error handler answers 500 without internal details
   }
 });
 
@@ -1497,16 +1525,29 @@ app.delete('/api/carts/hold/:id', requirePermission('pos.hold'), (req: Request, 
 });
 
 // Atomic POS Checkout -> Deduct Inventory + Generate UBL 2.1 XML + Sign + TLV QR + ZATCA Dispatch
-app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, res: Response) => {
+const CHECKOUT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'INVALID_QTY',
+  'PRODUCT_NOT_FOUND',
+  'INSUFFICIENT_STOCK',
+]);
+
+app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const authUser = res.locals.authUser as AuthUser;
   const rawItems = Array.isArray(b.items) ? (b.items as Array<Record<string, unknown>>) : [];
   const invoiceSubtype: InvoiceSubtype =
     b.invoice_subtype === '0100000' ? '0100000' : '0200000';
-  const invoiceTypeCode: InvoiceTypeCode =
-    b.invoice_type_code === '381' || b.invoice_type_code === '383'
-      ? (b.invoice_type_code as InvoiceTypeCode)
-      : '388';
+
+  // Sales invoices only (R1.5, SEC-09). Credit notes are issued through
+  // POST /api/invoices/:id/credit-note, which links them to the original sale.
+  if (b.invoice_type_code !== undefined && b.invoice_type_code !== '388') {
+    res.status(400).json({
+      error: 'Only sales invoices can be issued here.',
+      code: 'INVALID_DOCUMENT_TYPE',
+    });
+    return;
+  }
+  const invoiceTypeCode: InvoiceTypeCode = '388';
   const paymentMethod: PaymentMethod =
     b.payment_method === 'card' || b.payment_method === 'split'
       ? (b.payment_method as PaymentMethod)
@@ -1524,6 +1565,39 @@ app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, 
     return;
   }
 
+  // Customer: an unknown id is an error (it used to fall back to the cash
+  // customer silently). A standard tax invoice (B2B) needs a registered customer
+  // with a valid VAT number (D12).
+  let customerName = 'عميل نقدي / Cash Customer';
+  let customerVat = '';
+  if (customerId) {
+    const cust = db
+      .prepare('SELECT name_ar, vat_number FROM customers WHERE id = ?')
+      .get(customerId) as { name_ar: string; vat_number: string } | undefined;
+    if (!cust) {
+      res.status(400).json({ error: 'Customer not found.', code: 'CUSTOMER_NOT_FOUND' });
+      return;
+    }
+    customerName = cust.name_ar;
+    customerVat = cust.vat_number.trim();
+  }
+  if (invoiceSubtype === '0100000') {
+    if (!customerId) {
+      res.status(400).json({
+        error: 'A tax invoice (B2B) requires a registered customer.',
+        code: 'CUSTOMER_REQUIRED',
+      });
+      return;
+    }
+    if (!isValidVatNumber(customerVat)) {
+      res.status(400).json({
+        error: 'A tax invoice (B2B) requires the customer to have a valid 15-digit VAT number.',
+        code: 'CUSTOMER_VAT_INVALID',
+      });
+      return;
+    }
+  }
+
   try {
     const prepared = db.transaction(() => {
       const org = getOrganizationSettings();
@@ -1534,21 +1608,6 @@ app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, 
       const nextIcv = (org.last_icv || 0) + 1;
       const uuid = crypto.randomUUID();
       const invoiceNumber = `INV-${issueDate.slice(0, 4)}-${String(nextIcv).padStart(5, '0')}`;
-
-      let customerName = 'عميل نقدي / Cash Customer';
-      let customerVat = '';
-      if (customerId) {
-        const cust = db
-          .prepare('SELECT * FROM customers WHERE id = ?')
-          .get(customerId) as { name_ar: string; vat_number: string } | undefined;
-        if (cust) {
-          customerName = cust.name_ar;
-          customerVat = cust.vat_number;
-        }
-      } else if (invoiceSubtype === '0100000') {
-        customerName = String(b.customer_name ?? '').trim();
-        customerVat = String(b.customer_vat ?? '').trim();
-      }
 
       const lineItems: InvoiceItem[] = [];
       let rawSubtotal = 0;
@@ -1730,38 +1789,46 @@ app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, 
     });
 
     const result = prepared();
-    if (result.org.zatca_enabled === 1) {
-      const zatcaRes = await dispatchToZatca({
-        org: result.org,
-        uuid: result.uuid,
-        invoiceHashBase64: result.invoiceHashBase64,
-        xml: result.xml,
-        invoiceSubtype: result.invoiceSubtype,
-        customerVat: result.customerVat,
-      });
 
-      db.prepare(`
-        UPDATE invoices
-        SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ?
-        WHERE id = ?
-      `).run(
-        zatcaRes.status,
-        zatcaRes.mode,
-        JSON.stringify(zatcaRes),
-        result.invoiceId
-      );
-    } else {
-      db.prepare(`
-        UPDATE invoices
-        SET zatca_status = 'DISABLED', zatca_response_json = ?
-        WHERE id = ?
-      `).run(
-        JSON.stringify({
-          disabled: true,
-          message: 'ZATCA integration is currently disabled.',
-        }),
-        result.invoiceId
-      );
+    // The invoice and its stock movements are committed from here on. A failure
+    // in the follow-up steps must not be reported as a failed checkout, or the
+    // cashier would sell the same cart again (R1.5).
+    try {
+      if (result.org.zatca_enabled === 1) {
+        const zatcaRes = await dispatchToZatca({
+          org: result.org,
+          uuid: result.uuid,
+          invoiceHashBase64: result.invoiceHashBase64,
+          xml: result.xml,
+          invoiceSubtype: result.invoiceSubtype,
+          customerVat: result.customerVat,
+        });
+
+        db.prepare(`
+          UPDATE invoices
+          SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ?
+          WHERE id = ?
+        `).run(
+          zatcaRes.status,
+          zatcaRes.mode,
+          JSON.stringify(zatcaRes),
+          result.invoiceId
+        );
+      } else {
+        db.prepare(`
+          UPDATE invoices
+          SET zatca_status = 'DISABLED', zatca_response_json = ?
+          WHERE id = ?
+        `).run(
+          JSON.stringify({
+            disabled: true,
+            message: 'ZATCA integration is currently disabled.',
+          }),
+          result.invoiceId
+        );
+      }
+    } catch (err) {
+      console.error(`[checkout] post-commit step failed for invoice #${result.invoiceId}:`, err);
     }
 
     const invoices = getAllInvoices();
@@ -1775,13 +1842,17 @@ app.post('/api/invoices', requirePermission('pos.access'), async (req: Request, 
       movements: getRecentMovements(80),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Checkout failed.';
-    res.status(400).json({ error: message });
+    const code = knownErrorCode(err, CHECKOUT_ERROR_CODES);
+    if (code) {
+      res.status(400).json({ error: (err as Error).message, code });
+      return;
+    }
+    throw err; // unexpected: central error handler answers 500
   }
-});
+}));
 
 // Retry ZATCA submission for pending/rejected invoice
-app.post('/api/invoices/:id/retry', requirePermission('zatca.manage'), async (req: Request, res: Response) => {
+app.post('/api/invoices/:id/retry', requirePermission('zatca.manage'), asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as Invoice | undefined;
   if (!inv) {
@@ -1813,10 +1884,10 @@ app.post('/api/invoices/:id/retry', requirePermission('zatca.manage'), async (re
   sendScoped(res, {
     invoices: getAllInvoices(),
   });
-});
+}));
 
 // Issue ZATCA Credit Note (381) for an existing invoice and return items to stock
-app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), async (req: Request, res: Response) => {
+app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asyncHandler(async (req: Request, res: Response) => {
   const sourceId = Number(req.params.id);
   const sourceInv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(sourceId) as Invoice | undefined;
   if (!sourceInv) {
@@ -1984,29 +2055,36 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
   });
 
   const result = prepared();
-  if (result.org.zatca_enabled === 1) {
-    const zatcaRes = await dispatchToZatca({
-      org: result.org,
-      uuid: result.uuid,
-      invoiceHashBase64: result.invoiceHashBase64,
-      xml: result.xml,
-      invoiceSubtype: result.invoiceSubtype,
-      customerVat: result.customerVat,
-    });
 
-    db.prepare(`
-      UPDATE invoices SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ? WHERE id = ?
-    `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), result.invoiceId);
-  } else {
-    db.prepare(`
-      UPDATE invoices SET zatca_status = 'DISABLED', zatca_response_json = ? WHERE id = ?
-    `).run(
-      JSON.stringify({
-        disabled: true,
-        message: 'ZATCA integration is currently disabled.',
-      }),
-      result.invoiceId
-    );
+  // The credit note and the restocking are committed from here on: a failure in
+  // the follow-up steps must not be reported as a failed credit note (R1.5).
+  try {
+    if (result.org.zatca_enabled === 1) {
+      const zatcaRes = await dispatchToZatca({
+        org: result.org,
+        uuid: result.uuid,
+        invoiceHashBase64: result.invoiceHashBase64,
+        xml: result.xml,
+        invoiceSubtype: result.invoiceSubtype,
+        customerVat: result.customerVat,
+      });
+
+      db.prepare(`
+        UPDATE invoices SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ? WHERE id = ?
+      `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), result.invoiceId);
+    } else {
+      db.prepare(`
+        UPDATE invoices SET zatca_status = 'DISABLED', zatca_response_json = ? WHERE id = ?
+      `).run(
+        JSON.stringify({
+          disabled: true,
+          message: 'ZATCA integration is currently disabled.',
+        }),
+        result.invoiceId
+      );
+    }
+  } catch (err) {
+    console.error(`[credit-note] post-commit step failed for invoice #${result.invoiceId}:`, err);
   }
 
   const invoices = getAllInvoices();
@@ -2017,9 +2095,39 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
     invoices,
     movements: getRecentMovements(80),
   });
-});
+}));
+
+// Central error handler (R1.5, SEC-08/SEC-10): every error ends as a JSON
+// response without stack traces or internal messages; details go to the server
+// log only. Must be registered after all routes.
+function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction): void {
+  const e = err as { type?: string } | null;
+  if (e?.type === 'entity.parse.failed') {
+    res.status(400).json({ error: 'Malformed JSON request body.', code: 'INVALID_JSON' });
+    return;
+  }
+  if (e?.type === 'entity.too.large') {
+    res.status(413).json({ error: 'Request body is too large.', code: 'PAYLOAD_TOO_LARGE' });
+    return;
+  }
+
+  console.error('[error]', err);
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  res.status(500).json({ error: 'Internal server error.', code: 'INTERNAL' });
+}
+
+app.use(errorHandler);
 
 async function startServer(): Promise<void> {
+  // Last-resort safety net (R1.5): a stray rejected promise is logged instead of
+  // crashing the server for every terminal.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason);
+  });
+
   const port = Number(process.env.PORT) || 3000;
   const currentFile = fileURLToPath(import.meta.url);
   const currentDir = path.dirname(currentFile);
@@ -2057,6 +2165,9 @@ async function startServer(): Promise<void> {
       }
     });
   }
+
+  // Also cover the static / SPA routes registered above.
+  app.use(errorHandler);
 
   app.listen(port, '0.0.0.0', () => {
     console.log(`Mizan POS & ZATCA server running at http://0.0.0.0:${port}`);

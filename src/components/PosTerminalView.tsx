@@ -22,6 +22,7 @@ import type {
   Product,
 } from '../types';
 import { formatMoney, translations } from '../i18n';
+import { isValidVatNumber } from '../validation';
 
 export interface CartLine {
   product: Product;
@@ -261,6 +262,20 @@ export function PosTerminalView({
         'error'
       );
       return;
+    }
+    // Same rule as the server (D12): checked here first so a rejected sale
+    // never reaches the server and the cart stays intact.
+    if (invoiceSubtype === '0100000') {
+      const buyer = customers.find((c) => c.id === customerId);
+      if (!isValidVatNumber(buyer?.vat_number)) {
+        onNotify(
+          isAr
+            ? 'الفاتورة الضريبية تتطلب رقماً ضريبياً صحيحاً للعميل (15 رقماً يبدأ وينتهي بـ 3)'
+            : 'A tax invoice requires the customer to have a valid 15-digit VAT number (starting and ending with 3)',
+          'error'
+        );
+        return;
+      }
     }
 
     setSubmitting(true);
