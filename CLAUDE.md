@@ -51,7 +51,7 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 
 | Layer | Current | Target (see ARCHITECTURE) |
 |---|---|---|
-| Language | TypeScript ^7. `strict` is on by default in TS 7 (tsconfig doesn't set it explicitly); the code passes with 0 errors | Keep 0 errors; set `"strict": true` explicitly (R1.11) |
+| Language | TypeScript ^7 with `"strict": true` set explicitly (R1.11); 0 errors | Keep 0 errors |
 | Frontend | React 19, Vite 8, Tailwind 4, lucide-react, qrcode | + React Router, TanStack Query, shared UI kit, typed i18n |
 | Backend | Express ^4.21 in a single `server.ts` | Express 5 modular monolith (`server/src/modules/*`) |
 | Validation | Manual `String(b.x ?? '')` checks | zod schemas in `shared/schemas` |
@@ -60,7 +60,7 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 | Auth | Bearer token held in React state | httpOnly cookie session + CSRF |
 | Logging | `console.log` at boot only | pino (stdout) + optional Sentry |
 | Tests | Vitest: API tests with Supertest (`tests/api`, temp SQLite per file) and UI tests with Testing Library + jsdom (`tests/ui/*.test.tsx`); CI on Node 22/24 | + MariaDB integration tests, Playwright E2E |
-| Package manager | npm + `package-lock.json` (`bun.lock` removed in R1.1) | + `engines.node >= 22` |
+| Package manager | npm + `package-lock.json`, package `mizan-pos`, `engines.node >= 22`. Build tools (vite and its plugins) stay in `dependencies` because Hostinger builds on the server; CI runs `npm audit --omit=dev --audit-level=high` (R1.11) | — |
 
 ---
 

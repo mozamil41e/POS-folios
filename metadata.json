@@ -1,8 +1,0 @@
-{
-  "name": "Mizan POS — نظام ميزان للكاشير والفوترة الإلكترونية",
-  "description": "نظام كاشير متكامل لإدارة المبيعات والمشتريات والمخزون وإصدار الفواتير والطباعة الحرارية مع دعم الفاتورة الإلكترونية (ZATCA) عبر Node.js.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}

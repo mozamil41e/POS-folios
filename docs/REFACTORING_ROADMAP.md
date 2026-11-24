@@ -229,6 +229,7 @@ flowchart TD
 | المخاطر | Hostinger قد لا يثبت devDependencies عند البناء ⇒ **يُتحقق منه في R8.1 قبل النقل**، وإلا تبقى أدوات البناء في dependencies |
 | الأولوية | Low |
 | معايير القبول | `npm ls` نظيف؛ البناء ينجح؛ `npm audit --omit=dev` بلا ثغرات عالية |
+| الحالة | ✅ **منجز** على فرع `r1/template-cleanup` (2026-11-25): حُذفت `@google/genai` و`motion` و`dotenv` و`autoprefixer` (لا يستوردها أي ملف)؛ نُقلت `@types/better-sqlite3` و`@types/qrcode` إلى devDependencies، وبقيت أدوات البناء في dependencies لأن Hostinger يبني على الخادم (لا فائدة من نقلها)؛ الحزمة `mizan-pos` 0.1.0 و`engines.node >= 22`؛ `clean` يعمل على Windows؛ **7 صور مرجعية من AI Studio كانت تُنشر للعموم من `public/assets/aistudio/`** نُقلت إلى `docs/design-references/`؛ حُذف `metadata.json` و`favicon.ico` المكرر في الجذر؛ `vite.config.ts` بلا بقايا AI Studio؛ `tsconfig` بـ `"strict": true` صريح وبلا decorators و`allowJs`؛ `.env.example` بالمتغيرات الفعلية (التطبيق لا يقرأ ملف `.env`)؛ CI يفحص `npm audit`. تثبيت نظيف بـ `npm ci` + 206 اختبارات + بناء ناجح |
 
 ### R1.12 تقرير المرحلة
 `docs/reports/R1-report.md`: المنجز، نتائج الاختبارات، الحالة الأمنية (لا Critical مفتوح)، ما تبقى. **بوابة مراجعة قبل R2.**
