@@ -167,6 +167,6 @@ describe('stock movements and the ledger (R1.10, DB-11)', () => {
       .all();
     expect(mismatches).toEqual([]);
     const row = t.db.prepare('SELECT stock_qty FROM products WHERE id = ?').get(id) as { stock_qty: number };
-    expect(row.stock_qty).toBe(10 + 5 - 4 - 2 + 4); // the credit note returns the 4 sold (until D5 in R5)
+    expect(row.stock_qty).toBe(10 + 5 - 4 - 2); // D5: the credit note puts nothing back
   });
 });

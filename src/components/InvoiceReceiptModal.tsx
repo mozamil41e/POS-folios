@@ -390,8 +390,8 @@ export function InvoiceReceiptModal({
     // A credit note is a permanent financial document: ask first.
     const confirmed = window.confirm(
       isAr
-        ? `إصدار إشعار دائن (مرتجع) كامل للفاتورة ${invoice.invoice_number} بقيمة ${formatMoney(invoice.grand_total, lang)}؟ لا يمكن التراجع عن هذه العملية.`
-        : `Issue a full credit note for ${invoice.invoice_number} (${formatMoney(invoice.grand_total, lang)})? This cannot be undone.`
+        ? `إصدار إشعار دائن (مرتجع) كامل للفاتورة ${invoice.invoice_number} بقيمة ${formatMoney(invoice.grand_total, lang)}؟ الأصناف لا تعود إلى المخزون. لا يمكن التراجع عن هذه العملية.`
+        : `Issue a full credit note for ${invoice.invoice_number} (${formatMoney(invoice.grand_total, lang)})? Items are not returned to stock. This cannot be undone.`
     );
     if (!confirmed) return;
     setIssuingCredit(true);

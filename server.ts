@@ -1694,30 +1694,10 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
     // Credit notes have their own sequence (R1.8): they no longer consume invoice numbers.
     const invoiceNumber = nextDocumentNumber(db, 'CN');
 
-    for (const item of sourceItems) {
-      const prod = db.prepare('SELECT stock_qty FROM products WHERE id = ?').get(item.product_id) as
-        | { stock_qty: number }
-        | undefined;
-      if (prod) {
-        const newQty = prod.stock_qty + item.qty;
-        db.prepare('UPDATE products SET stock_qty = ?, updated_at = ? WHERE id = ?').run(
-          newQty,
-          createdAt,
-          item.product_id
-        );
-        db.prepare(`
-          INSERT INTO stock_movements (product_id, type, qty_delta, balance_after, reference_no, notes, created_at)
-          VALUES (?, 'return', ?, ?, ?, ?, ?)
-        `).run(
-          item.product_id,
-          item.qty,
-          newQty,
-          invoiceNumber,
-          `إشعار دائن للفاتورة ${sourceInv.invoice_number}`,
-          createdAt
-        );
-      }
-    }
+    // D5 (owner): a credit note reverses revenue and VAT only; it never puts
+    // stock back. A returned dish cannot become raw chicken or rice again, so
+    // its ingredients stay consumed. A sealed item that really goes back on
+    // the shelf is recorded by hand as a 'return' stock movement (inventory.adjust).
 
     const info = db
       .prepare(`
@@ -1775,7 +1755,7 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
     return { invoiceId: Number(info.lastInsertRowid) };
   });
 
-  // Committed once prepared() returns (credit note + restocking). Any follow-up
+  // Committed once prepared() returns (credit note and its lines). Any follow-up
   // step added later must log its failures, not report a failed credit note (R1.5).
   const result = prepared();
 

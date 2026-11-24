@@ -44,8 +44,11 @@ describe('POST /api/invoices/:id/credit-note (characterization)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('issues a full credit note and returns every item to stock', async () => {
+  // D5 (owner): a credit note reverses revenue and VAT but never restocks:
+  // a returned dish cannot go back to raw ingredients.
+  it('issues a full credit note without putting anything back in stock', async () => {
     const before = await stockOf(t.app, adminToken, SEED.milk.id);
+    const movementsBefore = t.db.prepare('SELECT COUNT(*) AS n FROM stock_movements').get();
     const res = await creditNoteFor(adminToken, sale.id);
     expect(res.status).toBe(201);
 
@@ -56,13 +59,9 @@ describe('POST /api/invoices/:id/credit-note (characterization)', () => {
     expect(cn.related_invoice_number).toBe(sale.invoice_number);
     expect(cn.grand_total).toBe(sale.grand_total);
 
-    expect(await stockOf(t.app, adminToken, SEED.milk.id)).toBe(before + 2);
-    expect(res.body.movements[0]).toMatchObject({
-      product_id: SEED.milk.id,
-      type: 'return',
-      qty_delta: 2,
-      reference_no: cn.invoice_number,
-    });
+    expect(cn.items).toHaveLength(1); // same lines as the sale (milk x2)
+    expect(await stockOf(t.app, adminToken, SEED.milk.id)).toBe(before);
+    expect(t.db.prepare('SELECT COUNT(*) AS n FROM stock_movements').get()).toEqual(movementsBefore);
   });
 
   it('refuses a second credit note for the same invoice', async () => {

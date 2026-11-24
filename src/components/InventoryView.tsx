@@ -723,7 +723,7 @@ export function InventoryView({
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
                 >
                   <option value="purchase">{isAr ? 'توريد / فاتورة شراء (+)' : 'Purchase Restock (+)'}</option>
-                  <option value="return">{isAr ? 'مرتجع (+)' : 'Customer Return (+)'}</option>
+                  <option value="return">{isAr ? 'إعادة صنف سليم للمخزون (+)' : 'Sealed item back to stock (+)'}</option>
                   <option value="adjustment">{isAr ? 'تسوية جرد (+/-)' : 'Stock Adjustment (+/-)'}</option>
                 </select>
               </div>

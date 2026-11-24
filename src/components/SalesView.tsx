@@ -583,8 +583,8 @@ export function SalesView({
     // A credit note is a permanent financial document: ask first.
     const confirmed = window.confirm(
       isAr
-        ? `إصدار إشعار دائن (مرتجع) كامل للفاتورة ${inv.invoice_number} بقيمة ${formatMoney(inv.grand_total, lang)}؟ لا يمكن التراجع عن هذه العملية.`
-        : `Issue a full credit note for ${inv.invoice_number} (${formatMoney(inv.grand_total, lang)})? This cannot be undone.`
+        ? `إصدار إشعار دائن (مرتجع) كامل للفاتورة ${inv.invoice_number} بقيمة ${formatMoney(inv.grand_total, lang)}؟ الأصناف لا تعود إلى المخزون. لا يمكن التراجع عن هذه العملية.`
+        : `Issue a full credit note for ${inv.invoice_number} (${formatMoney(inv.grand_total, lang)})? Items are not returned to stock. This cannot be undone.`
     );
     if (!confirmed) return;
     setIssuingCreditId(inv.id);
