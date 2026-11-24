@@ -8,17 +8,21 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
-import type { Invoice, Language, OrganizationSettings } from '../types';
+import type { AuthUser, Invoice, Language, OrganizationSettings } from '../types';
 import { formatDateTime, formatMoney } from '../i18n';
+import { hasPermission } from '../permissions';
 import { QrCodeCanvas } from './QrCodeCanvas';
 
 interface InvoiceReceiptModalProps {
   invoice: Invoice | null;
   settings: OrganizationSettings;
   lang: Language;
+  /** The credit-note button needs sales.return. */
+  currentUser: AuthUser;
   autoPrint?: boolean;
   onClose: () => void;
-  onCreditNote: (invoiceId: number) => Promise<void>;
+  /** Resolves true when the credit note was issued (the parent then shows its receipt). */
+  onCreditNote: (invoiceId: number) => Promise<boolean>;
   onNotify?: (msg: string, tone?: 'success' | 'error') => void;
 }
 
@@ -44,11 +48,13 @@ export function InvoiceReceiptModal({
   invoice,
   settings,
   lang,
+  currentUser,
   autoPrint = false,
   onClose,
   onCreditNote,
   onNotify,
 }: InvoiceReceiptModalProps) {
+  const canReturn = hasPermission(currentUser, 'sales.return');
   const [format, setFormat] = useState<ReceiptFormat>(
     settings.thermal_width_mm === 58 ? 'thermal58' : 'thermal80'
   );
@@ -364,17 +370,35 @@ export function InvoiceReceiptModal({
     : 'Sales Receipt';
 
   const handleCopyPublicUrl = async () => {
-    await navigator.clipboard.writeText(publicUrl);
+    try {
+      // navigator.clipboard is missing outside HTTPS and can be refused by the browser.
+      await navigator.clipboard.writeText(publicUrl);
+    } catch {
+      onNotify?.(
+        isAr ? `تعذر النسخ، الرابط: ${publicUrl}` : `Could not copy. Link: ${publicUrl}`,
+        'error'
+      );
+      return;
+    }
     setCopiedUrl(true);
     onNotify?.(isAr ? 'تم نسخ رابط الفاتورة العام' : 'Public invoice URL copied');
     setTimeout(() => setCopiedUrl(false), 1800);
   };
 
   const handleIssueCreditNote = async () => {
+    if (issuingCredit) return;
+    // A credit note is a permanent financial document: ask first.
+    const confirmed = window.confirm(
+      isAr
+        ? `إصدار إشعار دائن (مرتجع) كامل للفاتورة ${invoice.invoice_number} بقيمة ${formatMoney(invoice.grand_total, lang)}؟ لا يمكن التراجع عن هذه العملية.`
+        : `Issue a full credit note for ${invoice.invoice_number} (${formatMoney(invoice.grand_total, lang)})? This cannot be undone.`
+    );
+    if (!confirmed) return;
     setIssuingCredit(true);
     try {
+      // On success the parent replaces this receipt with the credit note's,
+      // so the modal stays open; on failure the original receipt stays.
       await onCreditNote(invoice.id);
-      onClose();
     } finally {
       setIssuingCredit(false);
     }
@@ -422,7 +446,7 @@ export function InvoiceReceiptModal({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {invoice.invoice_type_code === '388' && (
+            {canReturn && invoice.invoice_type_code === '388' && (
               <button
                 type="button"
                 disabled={issuingCredit}

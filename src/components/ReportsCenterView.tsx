@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AuthUser,
   Customer,
   Invoice,
   Language,
@@ -31,6 +32,7 @@ import type {
   VoucherType,
 } from '../types';
 import { formatDateTime, formatMoney } from '../i18n';
+import { hasPermission } from '../permissions';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 export type ReportCategoryId =
@@ -78,6 +80,8 @@ export type ReportId =
 
 interface ReportsCenterViewProps {
   lang: Language;
+  /** Voucher and wastage buttons follow this user's permissions. */
+  currentUser: AuthUser;
   settings: OrganizationSettings;
   invoices: Invoice[];
   products: Product[];
@@ -94,16 +98,16 @@ interface ReportsCenterViewProps {
     amount: number;
     notes: string;
     voucher_date: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   /** Vouchers are voided with a reason, never deleted (R1.8). */
-  onVoidVoucher: (id: number, reason: string) => Promise<void>;
+  onVoidVoucher: (id: number, reason: string) => Promise<boolean>;
   onStockMovement: (payload: {
     product_id: number;
     type: 'purchase' | 'adjustment' | 'return';
     qty: number;
     notes: string;
     reference_no?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
 }
 
@@ -169,6 +173,7 @@ function inDateRange(isoOrDate: string, fromDate: string, toDate: string): boole
 
 export function ReportsCenterView({
   lang,
+  currentUser,
   settings,
   invoices,
   products,
@@ -183,6 +188,9 @@ export function ReportsCenterView({
   onNotify,
 }: ReportsCenterViewProps) {
   const isAr = lang === 'ar';
+  // reports.view can read every report; the write buttons need the route's own key.
+  const canManageVouchers = hasPermission(currentUser, 'vouchers.manage');
+  const canRecordWastage = hasPermission(currentUser, 'inventory.adjust');
 
   const [openCategories, setOpenCategories] = useState<Record<ReportCategoryId, boolean>>({
     financial: true,
@@ -2532,9 +2540,10 @@ export function ReportsCenterView({
     e.preventDefault();
     const amt = Number(voucherForm.amount);
     if (!voucherForm.party_name.trim() || !Number.isFinite(amt) || amt <= 0) return;
+    if (savingVoucher) return;
     setSavingVoucher(true);
     try {
-      await onCreateVoucher({
+      const ok = await onCreateVoucher({
         voucher_type: voucherForm.voucher_type,
         payment_channel: voucherForm.payment_channel,
         party_name: voucherForm.party_name.trim(),
@@ -2543,6 +2552,8 @@ export function ReportsCenterView({
         notes: voucherForm.notes.trim(),
         voucher_date: voucherForm.voucher_date,
       });
+      // Keep what was typed when the voucher was not saved.
+      if (!ok) return;
       setVoucherForm((prev) => ({
         ...prev,
         party_name: '',
@@ -2561,15 +2572,17 @@ export function ReportsCenterView({
     const pid = Number(wastageForm.product_id);
     const qty = Math.floor(Number(wastageForm.qty));
     if (!pid || !Number.isFinite(qty) || qty <= 0) return;
+    if (savingWastage) return;
     setSavingWastage(true);
     try {
-      await onStockMovement({
+      const ok = await onStockMovement({
         product_id: pid,
         type: 'adjustment',
         qty: -qty,
         reference_no: `WST-${Date.now().toString().slice(-6)}`,
         notes: wastageForm.notes.trim() || (isAr ? 'إهلاك / تالف' : 'Product wastage write-off'),
       });
+      if (!ok) return;
       setWastageForm((prev) => ({ ...prev, qty: '1', notes: '' }));
       setShowWastageModal(false);
     } finally {
@@ -2652,6 +2665,9 @@ export function ReportsCenterView({
     );
   }
 
+  // Voucher create/void need vouchers.manage, not just reports.view.
+  const showVoucherActions = dataset.supportsVoucherCreate && canManageVouchers;
+
   // Active Report Viewer
   return (
     <div className="space-y-4">
@@ -2677,7 +2693,7 @@ export function ReportsCenterView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {dataset.supportsVoucherCreate && (
+          {showVoucherActions && (
             <button
               type="button"
               onClick={() => setShowVoucherModal(true)}
@@ -2687,7 +2703,7 @@ export function ReportsCenterView({
               {isAr ? 'إضافة سند قبض / صرف' : 'New Voucher'}
             </button>
           )}
-          {dataset.supportsWastageCreate && (
+          {dataset.supportsWastageCreate && canRecordWastage && (
             <button
               type="button"
               onClick={() => {
@@ -2876,7 +2892,7 @@ export function ReportsCenterView({
                   {col.label}
                 </th>
               ))}
-              {dataset.supportsVoucherCreate && (
+              {showVoucherActions && (
                 <th className="py-3 px-4 text-end font-semibold whitespace-nowrap">
                   {isAr ? 'حذف' : 'Delete'}
                 </th>
@@ -2887,7 +2903,7 @@ export function ReportsCenterView({
             {pagination.pagedItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={dataset.columns.length + (dataset.supportsVoucherCreate ? 1 : 0)}
+                  colSpan={dataset.columns.length + (showVoucherActions ? 1 : 0)}
                   className="py-10 text-center text-slate-400"
                 >
                   {isAr ? 'لا توجد بيانات مطابقة للفترة أو البحث' : 'No matching records found'}
@@ -2925,7 +2941,7 @@ export function ReportsCenterView({
                       </td>
                     );
                   })}
-                  {dataset.supportsVoucherCreate && (
+                  {showVoucherActions && (
                     <td className="py-3 px-4 text-end">
                       {row.voucherId ? (
                         <button
@@ -2962,7 +2978,7 @@ export function ReportsCenterView({
                     {dataset.totals?.[col.key] ?? ''}
                   </td>
                 ))}
-                {dataset.supportsVoucherCreate && <td />}
+                {showVoucherActions && <td />}
               </tr>
             </tfoot>
           )}

@@ -1,28 +1,32 @@
 import { useMemo, useState } from 'react';
 import { ArrowDownUp, Edit3, PackagePlus, Search, X } from 'lucide-react';
-import type { Language, Product, StockMovement } from '../types';
+import type { AuthUser, Language, Product, StockMovement } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
+import { hasPermission } from '../permissions';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 interface InventoryViewProps {
   lang: Language;
+  /** Add/edit and restock buttons follow this user's permissions. */
+  currentUser: AuthUser;
   products: Product[];
   movements: StockMovement[];
   pageSize?: number;
   /** False for users without cost permission: cost column and stock value are hidden (D11). */
   canViewCost: boolean;
-  onCreateProduct: (payload: Record<string, unknown>) => Promise<void>;
-  onUpdateProduct: (id: number, payload: Record<string, unknown>) => Promise<void>;
+  onCreateProduct: (payload: Record<string, unknown>) => Promise<boolean>;
+  onUpdateProduct: (id: number, payload: Record<string, unknown>) => Promise<boolean>;
   onStockMovement: (payload: {
     product_id: number;
     type: 'purchase' | 'adjustment' | 'return';
     qty: number;
     notes: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
 }
 
 export function InventoryView({
   lang,
+  currentUser,
   products,
   movements,
   pageSize = 10,
@@ -33,6 +37,10 @@ export function InventoryView({
 }: InventoryViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
+  // Same keys as POST/PUT /api/products and POST /api/inventory/movement.
+  const canManageProducts = hasPermission(currentUser, 'inventory.manage');
+  const canAdjustStock = hasPermission(currentUser, 'inventory.adjust');
+  const showRowActions = canManageProducts || canAdjustStock;
 
   const [tab, setTab] = useState<'catalog' | 'movements'>('catalog');
   const [search, setSearch] = useState('');
@@ -44,6 +52,8 @@ export function InventoryView({
   const [moveType, setMoveType] = useState<'purchase' | 'adjustment' | 'return'>('purchase');
   const [moveQty, setMoveQty] = useState<string>('10');
   const [moveNotes, setMoveNotes] = useState<string>('');
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [savingMovement, setSavingMovement] = useState(false);
 
   const [formState, setFormState] = useState({
     sku: '',
@@ -152,27 +162,38 @@ export function InventoryView({
       expiry_date: formState.expiry_date || null,
     };
 
-    if (editingProduct) {
-      await onUpdateProduct(editingProduct.id, payload);
-    } else {
-      await onCreateProduct(payload);
+    if (savingProduct) return;
+    setSavingProduct(true);
+    try {
+      const ok = editingProduct
+        ? await onUpdateProduct(editingProduct.id, payload)
+        : await onCreateProduct(payload);
+      // Keep the form open on failure so nothing has to be re-entered.
+      if (ok) setShowProductForm(false);
+    } finally {
+      setSavingProduct(false);
     }
-    setShowProductForm(false);
   };
 
   const handleMovementSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!movementTarget) return;
+    if (!movementTarget || savingMovement) return;
     const qty = Number(moveQty);
     if (!qty) return;
-    await onStockMovement({
-      product_id: movementTarget.id,
-      type: moveType,
-      qty,
-      notes: moveNotes,
-    });
-    setMovementTarget(null);
-    setMoveNotes('');
+    setSavingMovement(true);
+    try {
+      const ok = await onStockMovement({
+        product_id: movementTarget.id,
+        type: moveType,
+        qty,
+        notes: moveNotes,
+      });
+      if (!ok) return;
+      setMovementTarget(null);
+      setMoveNotes('');
+    } finally {
+      setSavingMovement(false);
+    }
   };
 
   return (
@@ -183,14 +204,16 @@ export function InventoryView({
           <h1 className="text-xl font-bold text-slate-900 dark:text-white">{t.invTitle}</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{t.invSubtitle}</p>
         </div>
-        <button
-          type="button"
-          onClick={openNewProductModal}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 self-start"
-        >
-          <PackagePlus className="w-4 h-4" />
-          {t.addProduct}
-        </button>
+        {canManageProducts && (
+          <button
+            type="button"
+            onClick={openNewProductModal}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 self-start"
+          >
+            <PackagePlus className="w-4 h-4" />
+            {t.addProduct}
+          </button>
+        )}
       </div>
 
       {/* Clean Single-Elevation KPI Strip */}
@@ -300,13 +323,18 @@ export function InventoryView({
                 <th className="py-3 px-4 text-end font-medium">{t.priceCol}</th>
                 <th className="py-3 px-4 text-end font-medium">{t.stockCol}</th>
                 <th className="py-3 px-4 text-start font-medium">{t.statusCol}</th>
-                <th className="py-3 px-4 text-end font-medium">{t.actionsCol}</th>
+                {showRowActions && (
+                  <th className="py-3 px-4 text-end font-medium">{t.actionsCol}</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {catalogPagination.pagedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={canViewCost ? 8 : 7} className="py-10 text-center text-slate-400">
+                  <td
+                    colSpan={(canViewCost ? 7 : 6) + (showRowActions ? 1 : 0)}
+                    className="py-10 text-center text-slate-400"
+                  >
                     {isAr ? 'لا توجد أصناف مطابقة للبحث' : 'No matching products found'}
                   </td>
                 </tr>
@@ -361,30 +389,37 @@ export function InventoryView({
                         {isOut ? t.outOfStock : isLow ? t.lowStock : t.available}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-end">
-                      <div className="inline-flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMovementTarget(p);
-                            setMoveType('purchase');
-                            setMoveQty('10');
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 whitespace-nowrap"
-                        >
-                          <ArrowDownUp className="w-3 h-3" />
-                          {t.restockAction}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditProductModal(p)}
-                          className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-                          title={t.editAction}
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
+                    {showRowActions && (
+                      <td className="py-3 px-4 text-end">
+                        <div className="inline-flex items-center gap-2">
+                          {canAdjustStock && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMovementTarget(p);
+                                setMoveType('purchase');
+                                setMoveQty('10');
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 whitespace-nowrap"
+                            >
+                              <ArrowDownUp className="w-3 h-3" />
+                              {t.restockAction}
+                            </button>
+                          )}
+                          {canManageProducts && (
+                            <button
+                              type="button"
+                              onClick={() => openEditProductModal(p)}
+                              className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+                              title={t.editAction}
+                              aria-label={t.editAction}
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })
@@ -625,9 +660,16 @@ export function InventoryView({
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg"
+                disabled={savingProduct}
+                className="px-5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg disabled:opacity-50"
               >
-                {isAr ? 'حفظ الصنف' : 'Save Product'}
+                {savingProduct
+                  ? isAr
+                    ? 'جاري الحفظ...'
+                    : 'Saving...'
+                  : isAr
+                  ? 'حفظ الصنف'
+                  : 'Save Product'}
               </button>
             </div>
           </form>
@@ -713,7 +755,8 @@ export function InventoryView({
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg"
+                disabled={savingMovement}
+                className="px-4 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg disabled:opacity-50"
               >
                 {isAr ? 'تأكيد الحركة' : 'Apply Movement'}
               </button>

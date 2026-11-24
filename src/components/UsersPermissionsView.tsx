@@ -979,8 +979,11 @@ export function UsersPermissionsView({
       {/* Add / Edit User Modal */}
       {showUserModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4">
+          {/* This form creates someone else's account: the browser must not offer the
+              admin's own saved login (it used to put the email into the phone field). */}
           <form
             onSubmit={handleSaveUser}
+            autoComplete="off"
             className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -1019,13 +1022,19 @@ export function UsersPermissionsView({
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                <label
+                  htmlFor="user-form-email"
+                  className="text-xs font-medium text-slate-700 dark:text-slate-300"
+                >
                   {isAr ? 'البريد الإلكتروني' : 'Email'}
                 </label>
                 <input
+                  id="user-form-email"
+                  name="user-form-email"
                   required
                   type="email"
                   dir="ltr"
+                  autoComplete="off"
                   value={userForm.email}
                   onChange={(e) =>
                     setUserForm((prev) => ({ ...prev, email: e.target.value }))
@@ -1035,12 +1044,19 @@ export function UsersPermissionsView({
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                <label
+                  htmlFor="user-form-phone"
+                  className="text-xs font-medium text-slate-700 dark:text-slate-300"
+                >
                   {isAr ? 'رقم الجوال' : 'Phone'}
                 </label>
                 <input
-                  type="text"
+                  id="user-form-phone"
+                  name="user-form-phone"
+                  type="tel"
+                  inputMode="tel"
                   dir="ltr"
+                  autoComplete="off"
                   placeholder="05xxxxxxxx"
                   value={userForm.phone}
                   onChange={(e) =>
@@ -1087,7 +1103,10 @@ export function UsersPermissionsView({
               </div>
 
               <div className="sm:col-span-2 space-y-1">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                <label
+                  htmlFor="user-form-password"
+                  className="text-xs font-medium text-slate-700 dark:text-slate-300"
+                >
                   {editingUser
                     ? isAr
                       ? 'كلمة مرور جديدة (اتركها فارغة للإبقاء على الحالية)'
@@ -1097,9 +1116,12 @@ export function UsersPermissionsView({
                     : 'Password'}
                 </label>
                 <input
+                  id="user-form-password"
+                  name="user-form-password"
                   required={!editingUser}
                   type="password"
                   dir="ltr"
+                  autoComplete="new-password"
                   minLength={6}
                   placeholder="••••••"
                   value={userForm.password}

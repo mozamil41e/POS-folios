@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AuthUser,
   Customer,
   Invoice,
   InvoiceSubtype,
@@ -25,12 +26,15 @@ import type {
   Product,
 } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
+import { hasPermission } from '../permissions';
 import { buildPublicInvoiceUrl } from './InvoiceReceiptModal';
 import { isValidVatNumber } from '../validation';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 interface SalesViewProps {
   lang: Language;
+  /** Sale, return and customer buttons follow this user's permissions. */
+  currentUser: AuthUser;
   settings: OrganizationSettings;
   products: Product[];
   customers: Customer[];
@@ -42,8 +46,8 @@ interface SalesViewProps {
     cash_amount: number;
     discount_total: number;
     customer_id: number | null;
-  }) => Promise<void>;
-  onCreditNote: (invoiceId: number) => Promise<void>;
+  }) => Promise<boolean>;
+  onCreditNote: (invoiceId: number) => Promise<boolean>;
   onCreateCustomer: (payload: {
     name_ar: string;
     name_en: string;
@@ -62,7 +66,7 @@ interface SalesViewProps {
       address_ar: string;
       phone: string;
     }
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   onOpenReceipt: (invoice: Invoice) => void;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
   /** False for users without cost permission: cost, profit and margin are hidden (D11). */
@@ -85,6 +89,7 @@ type PeriodFilter = 'all' | 'today' | '7d' | 'month';
 
 export function SalesView({
   lang,
+  currentUser,
   settings,
   products,
   customers,
@@ -99,6 +104,11 @@ export function SalesView({
 }: SalesViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
+  // Same keys the server checks on each route; hidden buttons avoid dead ends.
+  const canSell = hasPermission(currentUser, 'pos.access');
+  const canDiscount = hasPermission(currentUser, 'pos.discount');
+  const canReturn = hasPermission(currentUser, 'sales.return');
+  const canManageCustomers = hasPermission(currentUser, 'customers.manage');
 
   const [tab, setTab] = useState<'ledger' | 'analytics' | 'customers'>('ledger');
   const [search, setSearch] = useState('');
@@ -376,7 +386,13 @@ export function SalesView({
 
   const handleCopyLink = async (inv: Invoice) => {
     const url = buildPublicInvoiceUrl(inv.uuid, settings.public_base_url);
-    await navigator.clipboard.writeText(url);
+    try {
+      // navigator.clipboard is missing outside HTTPS and can be refused by the browser.
+      await navigator.clipboard.writeText(url);
+    } catch {
+      onNotify(isAr ? `تعذر النسخ، الرابط: ${url}` : `Could not copy. Link: ${url}`, 'error');
+      return;
+    }
     setCopiedId(inv.id);
     onNotify(isAr ? 'تم نسخ رابط الفاتورة العام' : 'Public invoice URL copied');
     setTimeout(() => setCopiedId(null), 1600);
@@ -494,7 +510,7 @@ export function SalesView({
 
     setSubmittingSale(true);
     try {
-      await onCreateSale({
+      const ok = await onCreateSale({
         items: draftLines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
         invoice_subtype: saleSubtype,
         payment_method: salePaymentMethod,
@@ -504,10 +520,11 @@ export function SalesView({
             : salePaymentMethod === 'cash'
             ? draftTotals.grandTotal
             : 0,
-        discount_total: Number(saleDiscount) || 0,
+        discount_total: canDiscount ? Number(saleDiscount) || 0 : 0,
         customer_id: saleCustomerId ? Number(saleCustomerId) : null,
       });
-      setShowNewSale(false);
+      // Keep the draft open on failure so nothing has to be re-entered.
+      if (ok) setShowNewSale(false);
     } finally {
       setSubmittingSale(false);
     }
@@ -542,27 +559,37 @@ export function SalesView({
   const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerForm.name_ar.trim()) return;
+    if (submittingCustomer) return;
     setSubmittingCustomer(true);
     try {
+      let saved: boolean;
       if (editingCustomer) {
-        await onUpdateCustomer(editingCustomer.id, customerForm);
+        saved = await onUpdateCustomer(editingCustomer.id, customerForm);
       } else {
         const newId = await onCreateCustomer(customerForm);
-        if (newId && showNewSale) {
+        saved = newId > 0;
+        if (saved && showNewSale) {
           setSaleCustomerId(newId);
         }
       }
-      setShowCustomerModal(false);
+      if (saved) setShowCustomerModal(false);
     } finally {
       setSubmittingCustomer(false);
     }
   };
 
-  const handleIssueReturn = async (invoiceId: number) => {
-    setIssuingCreditId(invoiceId);
+  const handleIssueReturn = async (inv: Invoice) => {
+    if (issuingCreditId !== null) return;
+    // A credit note is a permanent financial document: ask first.
+    const confirmed = window.confirm(
+      isAr
+        ? `إصدار إشعار دائن (مرتجع) كامل للفاتورة ${inv.invoice_number} بقيمة ${formatMoney(inv.grand_total, lang)}؟ لا يمكن التراجع عن هذه العملية.`
+        : `Issue a full credit note for ${inv.invoice_number} (${formatMoney(inv.grand_total, lang)})? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setIssuingCreditId(inv.id);
     try {
-      await onCreditNote(invoiceId);
-      setSelectedInvoice(null);
+      if (await onCreditNote(inv.id)) setSelectedInvoice(null);
     } finally {
       setIssuingCreditId(null);
     }
@@ -591,22 +618,26 @@ export function SalesView({
             <Download className="w-4 h-4" />
             {t.exportCsvBtn}
           </button>
-          <button
-            type="button"
-            onClick={openAddCustomer}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
-          >
-            <UserPlus className="w-4 h-4" />
-            {t.newCustomerBtn}
-          </button>
-          <button
-            type="button"
-            onClick={openNewSaleModal}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
-          >
-            <FilePlus2 className="w-4 h-4" />
-            {t.newSaleBtn}
-          </button>
+          {canManageCustomers && (
+            <button
+              type="button"
+              onClick={openAddCustomer}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <UserPlus className="w-4 h-4" />
+              {t.newCustomerBtn}
+            </button>
+          )}
+          {canSell && (
+            <button
+              type="button"
+              onClick={openNewSaleModal}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <FilePlus2 className="w-4 h-4" />
+              {t.newSaleBtn}
+            </button>
+          )}
         </div>
       </div>
 
@@ -897,12 +928,13 @@ export function SalesView({
                               <Copy className="w-3.5 h-3.5" />
                             )}
                           </button>
-                          {inv.invoice_type_code === '388' && !returnedBy && (
+                          {canReturn && inv.invoice_type_code === '388' && !returnedBy && (
                             <button
                               type="button"
-                              disabled={issuingCreditId === inv.id}
-                              onClick={() => void handleIssueReturn(inv.id)}
+                              disabled={issuingCreditId !== null}
+                              onClick={() => void handleIssueReturn(inv)}
                               title={t.creditNoteBtn}
+                              aria-label={t.creditNoteBtn}
                               className="p-1.5 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 disabled:opacity-50"
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
@@ -1174,13 +1206,15 @@ export function SalesView({
                 <th className="py-3 px-4 text-end font-medium">
                   {isAr ? 'إجمالي المشتريات' : 'Total Spent'}
                 </th>
-                <th className="py-3 px-4 text-end font-medium">{t.actionsCol}</th>
+                {canManageCustomers && (
+                  <th className="py-3 px-4 text-end font-medium">{t.actionsCol}</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {customersPagination.pagedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-slate-400">
+                  <td colSpan={canManageCustomers ? 6 : 5} className="py-10 text-center text-slate-400">
                     {isAr ? 'لا يوجد عملاء مطابقون' : 'No matching customers'}
                   </td>
                 </tr>
@@ -1217,16 +1251,18 @@ export function SalesView({
                     <td className="py-3 px-4 text-end font-mono font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
                       {formatMoney(c.netTotal, lang)}
                     </td>
-                    <td className="py-3 px-4 text-end">
-                      <button
-                        type="button"
-                        onClick={() => openEditCustomer(c)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 whitespace-nowrap"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                        {t.editAction}
-                      </button>
-                    </td>
+                    {canManageCustomers && (
+                      <td className="py-3 px-4 text-end">
+                        <button
+                          type="button"
+                          onClick={() => openEditCustomer(c)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 whitespace-nowrap"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          {t.editAction}
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))
               )}
@@ -1284,13 +1320,15 @@ export function SalesView({
                   <label className="text-slate-500">
                     {isAr ? 'العميل' : 'Customer'}
                   </label>
-                  <button
-                    type="button"
-                    onClick={openAddCustomer}
-                    className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
-                  >
-                    {t.addCustomer}
-                  </button>
+                  {canManageCustomers && (
+                    <button
+                      type="button"
+                      onClick={openAddCustomer}
+                      className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+                    >
+                      {t.addCustomer}
+                    </button>
+                  )}
                 </div>
                 <select
                   required={saleSubtype === '0100000'}
@@ -1446,17 +1484,21 @@ export function SalesView({
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2 border-t border-slate-200 dark:border-slate-800 text-xs">
-              <div className="flex items-center gap-2">
-                <label className="text-slate-500">{t.discount}</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={saleDiscount}
-                  onChange={(e) => setSaleDiscount(e.target.value)}
-                  className="w-28 text-end font-mono px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
-                />
-              </div>
+              {canDiscount ? (
+                <div className="flex items-center gap-2">
+                  <label className="text-slate-500">{t.discount}</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={saleDiscount}
+                    onChange={(e) => setSaleDiscount(e.target.value)}
+                    className="w-28 text-end font-mono px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
+                  />
+                </div>
+              ) : (
+                <div />
+              )}
               <div className="flex flex-wrap items-center gap-4 tabular-nums">
                 {canViewCost && (
                   <div>
@@ -1583,13 +1625,14 @@ export function SalesView({
                   <ExternalLink className="w-3.5 h-3.5" />
                   {isAr ? 'الرابط العام' : 'Public URL'}
                 </a>
-                {selectedInvoice.invoice_type_code === '388' &&
+                {canReturn &&
+                  selectedInvoice.invoice_type_code === '388' &&
                   !returnedByMap.get(selectedInvoice.invoice_number) && (
                     <button
                       type="button"
-                      disabled={issuingCreditId === selectedInvoice.id}
-                      onClick={() => void handleIssueReturn(selectedInvoice.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 whitespace-nowrap"
+                      disabled={issuingCreditId !== null}
+                      onClick={() => void handleIssueReturn(selectedInvoice)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 whitespace-nowrap disabled:opacity-50"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                       {t.creditNoteBtn}

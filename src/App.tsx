@@ -271,6 +271,44 @@ function PosWorkspace({
     fetchBootstrap();
   }, [fetchBootstrap]);
 
+  /**
+   * One contract for every mutation (R1.6, H1): a failure (HTTP error, bad JSON
+   * or no network) is reported here and the caller gets null. Screens rely on
+   * the boolean/number the handlers return and only clear carts, forms or
+   * modals after a confirmed success.
+   */
+  const callApi = async <T extends object>(
+    url: string,
+    init: RequestInit,
+    fallbackError: string
+  ): Promise<T | null> => {
+    let res: Response;
+    try {
+      res = await apiFetch(url, init);
+    } catch {
+      notify(
+        isAr
+          ? 'تعذر الاتصال بالخادم، تحقق من الشبكة وحاول مرة أخرى'
+          : 'Could not reach the server. Check the connection and try again.',
+        'error'
+      );
+      return null;
+    }
+    const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+    if (!res.ok || body === null) {
+      // A 401 already ended the session (apiFetch); nothing more to report.
+      if (res.status !== 401) notify(body?.error || fallbackError, 'error');
+      return null;
+    }
+    return body;
+  };
+
+  const jsonRequest = (method: 'POST' | 'PUT', payload?: unknown): RequestInit => ({
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  });
+
   const handleCheckout = async (payload: {
     items: Array<{ product_id: number; qty: number }>;
     invoice_subtype: InvoiceSubtype;
@@ -278,24 +316,15 @@ function PosWorkspace({
     cash_amount: number;
     discount_total: number;
     customer_id: number | null;
-  }) => {
-    const res = await apiFetch('/api/invoices', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+  }): Promise<boolean> => {
+    const body = await callApi<{
       invoice?: Invoice;
       settings?: OrganizationSettings;
       products?: BootstrapPayload['products'];
       invoices?: BootstrapPayload['invoices'];
       movements?: BootstrapPayload['movements'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Checkout failed', 'error');
-      return;
-    }
+    }>('/api/invoices', jsonRequest('POST', payload), 'Checkout failed');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -317,6 +346,7 @@ function PosWorkspace({
           : `Issued ${body.invoice.invoice_number}`
       );
     }
+    return true;
   };
 
   const handleHoldCart = async (payload: {
@@ -325,26 +355,33 @@ function PosWorkspace({
     discount: number;
     customer_id: number | null;
     invoice_subtype: InvoiceSubtype;
-  }) => {
-    const res = await apiFetch('/api/carts/hold', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as { heldCarts?: BootstrapPayload['heldCarts'] };
-    if (res.ok && body.heldCarts) {
+  }): Promise<boolean> => {
+    const body = await callApi<{ heldCarts?: BootstrapPayload['heldCarts'] }>(
+      '/api/carts/hold',
+      jsonRequest('POST', payload),
+      'Failed to hold the order'
+    );
+    if (!body) return false;
+    if (body.heldCarts) {
       setData((prev) => (prev ? { ...prev, heldCarts: body.heldCarts! } : prev));
     }
+    return true;
   };
 
-  const handleDeleteHeldCart = async (id: number) => {
-    const res = await apiFetch(`/api/carts/hold/${id}`, { method: 'DELETE' });
-    const body = (await res.json()) as { heldCarts?: BootstrapPayload['heldCarts'] };
-    if (res.ok && body.heldCarts) {
+  const handleDeleteHeldCart = async (id: number): Promise<boolean> => {
+    const body = await callApi<{ heldCarts?: BootstrapPayload['heldCarts'] }>(
+      `/api/carts/hold/${id}`,
+      { method: 'DELETE' },
+      'Failed to remove the held order'
+    );
+    if (!body) return false;
+    if (body.heldCarts) {
       setData((prev) => (prev ? { ...prev, heldCarts: body.heldCarts! } : prev));
     }
+    return true;
   };
 
+  /** Returns the new customer's id, or 0 when it was not saved. */
   const handleCreateCustomer = async (payload: {
     name_ar: string;
     name_en: string;
@@ -353,21 +390,16 @@ function PosWorkspace({
     address_ar: string;
     phone: string;
   }): Promise<number> => {
-    const res = await apiFetch('/api/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      customerId: number;
-      customers: BootstrapPayload['customers'];
-    };
-    if (res.ok) {
-      setData((prev) => (prev ? { ...prev, customers: body.customers } : prev));
-      notify(isAr ? 'تمت إضافة العميل' : 'Customer added');
-      return body.customerId;
+    const body = await callApi<{
+      customerId?: number;
+      customers?: BootstrapPayload['customers'];
+    }>('/api/customers', jsonRequest('POST', payload), 'Failed to add customer');
+    if (!body) return 0;
+    if (body.customers) {
+      setData((prev) => (prev ? { ...prev, customers: body.customers! } : prev));
     }
-    return 0;
+    notify(isAr ? 'تمت إضافة العميل' : 'Customer added');
+    return body.customerId ?? 0;
   };
 
   const handleUpdateCustomer = async (
@@ -380,41 +412,26 @@ function PosWorkspace({
       address_ar: string;
       phone: string;
     }
-  ) => {
-    const res = await apiFetch(`/api/customers/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
-      customers?: BootstrapPayload['customers'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to update customer', 'error');
-      return;
-    }
+  ): Promise<boolean> => {
+    const body = await callApi<{ customers?: BootstrapPayload['customers'] }>(
+      `/api/customers/${id}`,
+      jsonRequest('PUT', payload),
+      'Failed to update customer'
+    );
+    if (!body) return false;
     if (body.customers) {
       setData((prev) => (prev ? { ...prev, customers: body.customers! } : prev));
     }
     notify(isAr ? 'تم تحديث بيانات العميل' : 'Customer updated');
+    return true;
   };
 
-  const handleCreateProduct = async (payload: Record<string, unknown>) => {
-    const res = await apiFetch('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+  const handleCreateProduct = async (payload: Record<string, unknown>): Promise<boolean> => {
+    const body = await callApi<{
       products?: BootstrapPayload['products'];
       movements?: BootstrapPayload['movements'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to add product', 'error');
-      return;
-    }
+    }>('/api/products', jsonRequest('POST', payload), 'Failed to add product');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -425,19 +442,24 @@ function PosWorkspace({
         : prev
     );
     notify(isAr ? 'تمت إضافة الصنف بنجاح' : 'Product added');
+    return true;
   };
 
-  const handleUpdateProduct = async (id: number, payload: Record<string, unknown>) => {
-    const res = await apiFetch(`/api/products/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as { products?: BootstrapPayload['products'] };
-    if (res.ok && body.products) {
+  const handleUpdateProduct = async (
+    id: number,
+    payload: Record<string, unknown>
+  ): Promise<boolean> => {
+    const body = await callApi<{ products?: BootstrapPayload['products'] }>(
+      `/api/products/${id}`,
+      jsonRequest('PUT', payload),
+      'Failed to update product'
+    );
+    if (!body) return false;
+    if (body.products) {
       setData((prev) => (prev ? { ...prev, products: body.products! } : prev));
-      notify(isAr ? 'تم تحديث بيانات الصنف' : 'Product updated');
     }
+    notify(isAr ? 'تم تحديث بيانات الصنف' : 'Product updated');
+    return true;
   };
 
   const handleStockMovement = async (payload: {
@@ -446,21 +468,12 @@ function PosWorkspace({
     qty: number;
     notes: string;
     reference_no?: string;
-  }) => {
-    const res = await apiFetch('/api/inventory/movement', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+  }): Promise<boolean> => {
+    const body = await callApi<{
       products?: BootstrapPayload['products'];
       movements?: BootstrapPayload['movements'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Movement failed', 'error');
-      return;
-    }
+    }>('/api/inventory/movement', jsonRequest('POST', payload), 'Movement failed');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -471,8 +484,10 @@ function PosWorkspace({
         : prev
     );
     notify(isAr ? 'تم تحديث الرصيد المخزني' : 'Stock updated');
+    return true;
   };
 
+  /** Returns the new supplier's id, or 0 when it was not saved. */
   const handleCreateSupplier = async (payload: {
     name_ar: string;
     name_en: string;
@@ -482,20 +497,11 @@ function PosWorkspace({
     email: string;
     address_ar: string;
   }): Promise<number> => {
-    const res = await apiFetch('/api/suppliers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+    const body = await callApi<{
       supplierId?: number;
       suppliers?: BootstrapPayload['suppliers'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to add supplier', 'error');
-      return 0;
-    }
+    }>('/api/suppliers', jsonRequest('POST', payload), 'Failed to add supplier');
+    if (!body) return 0;
     if (body.suppliers) {
       setData((prev) => (prev ? { ...prev, suppliers: body.suppliers! } : prev));
     }
@@ -510,23 +516,14 @@ function PosWorkspace({
     paid_amount: number;
     notes: string;
     items: Array<{ product_id: number; qty: number; unit_cost: number; tax_rate: number }>;
-  }) => {
-    const res = await apiFetch('/api/purchases', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+  }): Promise<boolean> => {
+    const body = await callApi<{
       purchase?: Purchase;
       purchases?: BootstrapPayload['purchases'];
       products?: BootstrapPayload['products'];
       movements?: BootstrapPayload['movements'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to record purchase', 'error');
-      return;
-    }
+    }>('/api/purchases', jsonRequest('POST', payload), 'Failed to record purchase');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -542,26 +539,21 @@ function PosWorkspace({
         ? `تم تسجيل فاتورة المشتريات ${body.purchase?.purchase_number ?? ''} وتحديث المخزون`
         : `Purchase ${body.purchase?.purchase_number ?? ''} recorded & stock updated`
     );
+    return true;
   };
 
-  const handlePayPurchase = async (purchaseId: number, amount: number) => {
-    const res = await apiFetch(`/api/purchases/${purchaseId}/pay`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount }),
-    });
-    const body = (await res.json()) as {
-      error?: string;
-      purchases?: BootstrapPayload['purchases'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Payment failed', 'error');
-      return;
-    }
+  const handlePayPurchase = async (purchaseId: number, amount: number): Promise<boolean> => {
+    const body = await callApi<{ purchases?: BootstrapPayload['purchases'] }>(
+      `/api/purchases/${purchaseId}/pay`,
+      jsonRequest('POST', { amount }),
+      'Payment failed'
+    );
+    if (!body) return false;
     if (body.purchases) {
       setData((prev) => (prev ? { ...prev, purchases: body.purchases! } : prev));
     }
     notify(isAr ? 'تم تسجيل دفعة السداد للمورد' : 'Supplier payment recorded');
+    return true;
   };
 
   const handleCreateVoucher = async (payload: {
@@ -572,77 +564,60 @@ function PosWorkspace({
     amount: number;
     notes: string;
     voucher_date: string;
-  }) => {
-    const res = await apiFetch('/api/vouchers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
-      vouchers?: Voucher[];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to save voucher', 'error');
-      return;
-    }
+  }): Promise<boolean> => {
+    const body = await callApi<{ vouchers?: Voucher[] }>(
+      '/api/vouchers',
+      jsonRequest('POST', payload),
+      'Failed to save voucher'
+    );
+    if (!body) return false;
     if (body.vouchers) {
       setData((prev) => (prev ? { ...prev, vouchers: body.vouchers! } : prev));
     }
     notify(isAr ? 'تم حفظ السند بنجاح' : 'Voucher saved');
+    return true;
   };
 
   // Vouchers are voided with a reason, never deleted (R1.8).
-  const handleVoidVoucher = async (id: number, reason: string) => {
-    const res = await apiFetch(`/api/vouchers/${id}/void`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
-    });
-    const body = (await res.json()) as { error?: string; vouchers?: Voucher[] };
-    if (!res.ok) {
-      notify(body.error || 'Failed to void voucher', 'error');
-      return;
-    }
+  const handleVoidVoucher = async (id: number, reason: string): Promise<boolean> => {
+    const body = await callApi<{ vouchers?: Voucher[] }>(
+      `/api/vouchers/${id}/void`,
+      jsonRequest('POST', { reason }),
+      'Failed to void voucher'
+    );
+    if (!body) return false;
     if (body.vouchers) {
       setData((prev) => (prev ? { ...prev, vouchers: body.vouchers! } : prev));
     }
     notify(isAr ? 'تم إلغاء السند' : 'Voucher voided');
+    return true;
   };
 
-  const handleUpdateSettings = async (payload: Partial<OrganizationSettings>) => {
-    const res = await apiFetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as { error?: string; settings?: OrganizationSettings };
-    if (!res.ok) {
-      notify(body.error || 'Failed to update settings', 'error');
-      return;
-    }
+  const handleUpdateSettings = async (
+    payload: Partial<OrganizationSettings>
+  ): Promise<boolean> => {
+    const body = await callApi<{ settings?: OrganizationSettings }>(
+      '/api/settings',
+      jsonRequest('PUT', payload),
+      'Failed to update settings'
+    );
+    if (!body) return false;
     if (body.settings) {
       setData((prev) => (prev ? { ...prev, settings: body.settings! } : prev));
-      notify(isAr ? 'تم حفظ الإعدادات' : 'Settings saved');
     }
+    notify(isAr ? 'تم حفظ الإعدادات' : 'Settings saved');
+    return true;
   };
 
-  const handleCreditNote = async (invoiceId: number) => {
-    const res = await apiFetch(`/api/invoices/${invoiceId}/credit-note`, {
-      method: 'POST',
-    });
-    const body = (await res.json()) as {
-      error?: string;
+  const handleCreditNote = async (invoiceId: number): Promise<boolean> => {
+    const body = await callApi<{
       invoice?: Invoice;
       settings?: OrganizationSettings;
       products?: BootstrapPayload['products'];
       invoices?: Invoice[];
       movements?: BootstrapPayload['movements'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Credit note failed', 'error');
-      return;
-    }
+    }>(`/api/invoices/${invoiceId}/credit-note`, { method: 'POST' }, 'Credit note failed');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -660,8 +635,11 @@ function PosWorkspace({
           ? `تم إصدار إشعار دائن ${body.invoice.invoice_number}`
           : `Issued Credit Note ${body.invoice.invoice_number}`
       );
+      // Show the credit note's receipt; it is printed on demand, never automatically.
+      setAutoPrintModal(false);
       setReceiptInvoice(body.invoice);
     }
+    return true;
   };
 
   const handleCreateUser = async (payload: {
@@ -672,20 +650,11 @@ function PosWorkspace({
     role_id: number;
     is_active: boolean;
   }): Promise<boolean> => {
-    const res = await apiFetch('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+    const body = await callApi<{
       users?: BootstrapPayload['users'];
       roles?: BootstrapPayload['roles'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to create user', 'error');
-      return false;
-    }
+    }>('/api/users', jsonRequest('POST', payload), 'Failed to create user');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -710,21 +679,12 @@ function PosWorkspace({
       is_active: boolean;
     }
   ): Promise<boolean> => {
-    const res = await apiFetch(`/api/users/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+    const body = await callApi<{
       users?: BootstrapPayload['users'];
       roles?: BootstrapPayload['roles'];
       currentUser?: AuthUser;
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to update user', 'error');
-      return false;
-    }
+    }>(`/api/users/${id}`, jsonRequest('PUT', payload), 'Failed to update user');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -742,16 +702,11 @@ function PosWorkspace({
   };
 
   const handleDeleteUser = async (id: number): Promise<boolean> => {
-    const res = await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
-    const body = (await res.json()) as {
-      error?: string;
+    const body = await callApi<{
       users?: BootstrapPayload['users'];
       roles?: BootstrapPayload['roles'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to delete user', 'error');
-      return false;
-    }
+    }>(`/api/users/${id}`, { method: 'DELETE' }, 'Failed to delete user');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -772,20 +727,11 @@ function PosWorkspace({
     description_en: string;
     permissions: PermissionKey[];
   }): Promise<RoleRecord | null> => {
-    const res = await apiFetch('/api/roles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+    const body = await callApi<{
       role?: RoleRecord;
       roles?: BootstrapPayload['roles'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to create role', 'error');
-      return null;
-    }
+    }>('/api/roles', jsonRequest('POST', payload), 'Failed to create role');
+    if (!body) return null;
     setData((prev) =>
       prev
         ? {
@@ -808,21 +754,12 @@ function PosWorkspace({
       permissions: PermissionKey[];
     }
   ): Promise<boolean> => {
-    const res = await apiFetch(`/api/roles/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = (await res.json()) as {
-      error?: string;
+    const body = await callApi<{
       roles?: BootstrapPayload['roles'];
       users?: BootstrapPayload['users'];
       currentUser?: AuthUser;
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to update role', 'error');
-      return false;
-    }
+    }>(`/api/roles/${id}`, jsonRequest('PUT', payload), 'Failed to update role');
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -840,15 +777,12 @@ function PosWorkspace({
   };
 
   const handleDeleteRole = async (id: number): Promise<boolean> => {
-    const res = await apiFetch(`/api/roles/${id}`, { method: 'DELETE' });
-    const body = (await res.json()) as {
-      error?: string;
-      roles?: BootstrapPayload['roles'];
-    };
-    if (!res.ok) {
-      notify(body.error || 'Failed to delete role', 'error');
-      return false;
-    }
+    const body = await callApi<{ roles?: BootstrapPayload['roles'] }>(
+      `/api/roles/${id}`,
+      { method: 'DELETE' },
+      'Failed to delete role'
+    );
+    if (!body) return false;
     setData((prev) =>
       prev
         ? {
@@ -1021,6 +955,7 @@ function PosWorkspace({
             {section === 'pos' && (
               <PosTerminalView
                 lang={lang}
+                currentUser={authUser}
                 products={data.products ?? []}
                 customers={data.customers ?? []}
                 heldCarts={data.heldCarts ?? []}
@@ -1037,6 +972,7 @@ function PosWorkspace({
             {section === 'sales' && (
               <SalesView
                 lang={lang}
+                currentUser={authUser}
                 settings={data.settings}
                 products={data.products ?? []}
                 customers={data.customers ?? []}
@@ -1057,6 +993,7 @@ function PosWorkspace({
             {section === 'inventory' && (
               <InventoryView
                 lang={lang}
+                currentUser={authUser}
                 products={data.products ?? []}
                 movements={data.movements ?? []}
                 pageSize={data.settings.table_page_size || 10}
@@ -1070,6 +1007,7 @@ function PosWorkspace({
             {section === 'purchases' && (
               <PurchasesView
                 lang={lang}
+                currentUser={authUser}
                 products={data.products ?? []}
                 suppliers={data.suppliers ?? []}
                 purchases={data.purchases ?? []}
@@ -1120,6 +1058,7 @@ function PosWorkspace({
           invoice={receiptInvoice}
           settings={data.settings}
           lang={lang}
+          currentUser={authUser}
           autoPrint={autoPrintModal}
           onClose={() => {
             setReceiptInvoice(null);

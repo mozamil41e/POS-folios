@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AuthUser,
   Language,
   Product,
   Purchase,
@@ -17,10 +18,13 @@ import type {
   Supplier,
 } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
+import { hasPermission } from '../permissions';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 interface PurchasesViewProps {
   lang: Language;
+  /** New purchase, new supplier and payment follow this user's permissions. */
+  currentUser: AuthUser;
   products: Product[];
   suppliers: Supplier[];
   purchases: Purchase[];
@@ -32,8 +36,8 @@ interface PurchasesViewProps {
     paid_amount: number;
     notes: string;
     items: Array<{ product_id: number; qty: number; unit_cost: number; tax_rate: number }>;
-  }) => Promise<void>;
-  onPayPurchase: (purchaseId: number, amount: number) => Promise<void>;
+  }) => Promise<boolean>;
+  onPayPurchase: (purchaseId: number, amount: number) => Promise<boolean>;
   onCreateSupplier: (payload: {
     name_ar: string;
     name_en: string;
@@ -58,6 +62,7 @@ interface DraftPurchaseLine {
 
 export function PurchasesView({
   lang,
+  currentUser,
   products,
   suppliers,
   purchases,
@@ -69,6 +74,8 @@ export function PurchasesView({
 }: PurchasesViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
+  // purchases.view can browse; every write route needs purchases.manage.
+  const canManagePurchases = hasPermission(currentUser, 'purchases.manage');
 
   const [tab, setTab] = useState<'invoices' | 'suppliers'>('invoices');
   const [search, setSearch] = useState('');
@@ -79,6 +86,8 @@ export function PurchasesView({
   const [selectedPurchase, setSelectedPurchase] = useState<Purchase | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [savingSupplier, setSavingSupplier] = useState(false);
+  const [paying, setPaying] = useState(false);
 
   // New purchase form state
   const [supplierId, setSupplierId] = useState<number>(suppliers[0]?.id ?? 0);
@@ -210,9 +219,10 @@ export function PurchasesView({
       return;
     }
 
+    if (submitting) return;
     setSubmitting(true);
     try {
-      await onCreatePurchase({
+      const ok = await onCreatePurchase({
         supplier_id: supplierId,
         supplier_invoice_no: supplierInvNo,
         payment_status: paymentStatus,
@@ -225,7 +235,8 @@ export function PurchasesView({
           tax_rate: l.tax_rate,
         })),
       });
-      setShowNewPurchase(false);
+      // Keep the draft open on failure so nothing has to be re-entered.
+      if (ok) setShowNewPurchase(false);
     } finally {
       setSubmitting(false);
     }
@@ -233,9 +244,16 @@ export function PurchasesView({
 
   const handleSaveSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supplierForm.name_ar.trim()) return;
-    const newId = await onCreateSupplier(supplierForm);
-    if (newId) setSupplierId(newId);
+    if (!supplierForm.name_ar.trim() || savingSupplier) return;
+    setSavingSupplier(true);
+    let newId = 0;
+    try {
+      newId = await onCreateSupplier(supplierForm);
+    } finally {
+      setSavingSupplier(false);
+    }
+    if (!newId) return;
+    setSupplierId(newId);
     setShowNewSupplier(false);
     setSupplierForm({
       name_ar: '',
@@ -250,12 +268,17 @@ export function PurchasesView({
 
   const handleSettlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPurchase) return;
+    if (!selectedPurchase || paying) return;
     const amt = Number(payAmount);
     if (!amt || amt <= 0) return;
-    await onPayPurchase(selectedPurchase.id, amt);
-    setSelectedPurchase(null);
-    setPayAmount('');
+    setPaying(true);
+    try {
+      if (!(await onPayPurchase(selectedPurchase.id, amt))) return;
+      setSelectedPurchase(null);
+      setPayAmount('');
+    } finally {
+      setPaying(false);
+    }
   };
 
   return (
@@ -267,24 +290,26 @@ export function PurchasesView({
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{t.purSubtitle}</p>
         </div>
 
-        <div className="flex items-center gap-2 self-start">
-          <button
-            type="button"
-            onClick={() => setShowNewSupplier(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
-          >
-            <Building2 className="w-4 h-4" />
-            {t.newSupplierBtn}
-          </button>
-          <button
-            type="button"
-            onClick={openNewPurchaseModal}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
-          >
-            <FilePlus2 className="w-4 h-4" />
-            {t.newPurchaseBtn}
-          </button>
-        </div>
+        {canManagePurchases && (
+          <div className="flex items-center gap-2 self-start">
+            <button
+              type="button"
+              onClick={() => setShowNewSupplier(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <Building2 className="w-4 h-4" />
+              {t.newSupplierBtn}
+            </button>
+            <button
+              type="button"
+              onClick={openNewPurchaseModal}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <FilePlus2 className="w-4 h-4" />
+              {t.newPurchaseBtn}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* KPI Strip */}
@@ -851,7 +876,7 @@ export function PurchasesView({
               </span>
             </div>
 
-            {selectedPurchase.payment_status !== 'paid' && (
+            {canManagePurchases && selectedPurchase.payment_status !== 'paid' && (
               <form
                 onSubmit={handleSettlePayment}
                 className="flex items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800"
@@ -872,7 +897,8 @@ export function PurchasesView({
                   />
                   <button
                     type="submit"
-                    className="px-4 py-1.5 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg"
+                    disabled={paying}
+                    className="px-4 py-1.5 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg disabled:opacity-50"
                   >
                     {isAr ? 'تأكيد السداد' : 'Pay'}
                   </button>
@@ -1002,7 +1028,8 @@ export function PurchasesView({
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg"
+                disabled={savingSupplier}
+                className="px-5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg disabled:opacity-50"
               >
                 {isAr ? 'حفظ المورد' : 'Save Supplier'}
               </button>

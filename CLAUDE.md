@@ -59,22 +59,25 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 | Database | SQLite file in `./data` | **MariaDB** (Hostinger; MySQL-compatible SQL only) |
 | Auth | Bearer token held in React state | httpOnly cookie session + CSRF |
 | Logging | `console.log` at boot only | pino (stdout) + optional Sentry |
-| Tests | **none** | Vitest + Supertest + Playwright, run in GitHub Actions |
-| Package manager | `bun.lock` with npm scripts (inconsistent) | npm + `package-lock.json`, `engines.node >= 22` |
+| Tests | Vitest: API tests with Supertest (`tests/api`, temp SQLite per file) and UI tests with Testing Library + jsdom (`tests/ui/*.test.tsx`); CI on Node 22/24 | + MariaDB integration tests, Playwright E2E |
+| Package manager | npm + `package-lock.json` (`bun.lock` removed in R1.1) | + `engines.node >= 22` |
 
 ---
 
 ## 4. Commands (current)
 
 ```bash
-npm install          # node_modules is not committed. R1.1 standardises on npm (bun.lock will be removed)
+npm install          # node_modules is not committed
 npm run dev          # tsx server.ts — Express + Vite middleware on http://localhost:3000
 npm run build        # vite build + esbuild bundle server.ts -> server.js
 npm start            # node server.js (production mode, serves dist/)
-npm run lint         # currently only `tsc --noEmit`
+npm run lint         # oxlint (typescript-eslint does not support TS 7 yet)
+npm run typecheck    # tsc --noEmit
+npm test             # Vitest: tests/api (Node) + tests/ui (jsdom, opted in per file)
+npm run admin:create # create an admin from the command line
 ```
 
-Planned in R1.1: `npm test`, `npm run typecheck`, a real ESLint `npm run lint`, and `npm run seed:dev`.
+Planned in R1.7: `npm run seed:dev` (demo data in development only).
 
 ---
 
@@ -100,7 +103,8 @@ Do not assume that the target structure exists yet.
 - read permissions and secrets in responses (fixed in R1.3 on branch `r1/read-permissions`): all workspace responses go through `scopeForUser` (`src/server/visibility.ts`), using the rules in `src/permissions.ts`
 - reports computed from `LIMIT 100` data
 - SQLite would be wiped on every Hostinger deploy
-- a failed checkout clears the cart
+- a failed checkout clears the cart (fixed in R1.6 on branch `r1/ui-safety`): every `App.tsx` mutation goes through `callApi` and returns `boolean` (or the new id, 0 on failure); screens clear carts, forms and modals only after success
+- UI buttons follow permissions (R1.6): screens receive `currentUser` and use `hasPermission` with the same key as the route. This only avoids dead ends; the server's `requirePermission` is the real check
 
 ---
 

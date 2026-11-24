@@ -14,6 +14,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import type {
+  AuthUser,
   Customer,
   HeldCart,
   InvoiceSubtype,
@@ -22,6 +23,7 @@ import type {
   Product,
 } from '../types';
 import { formatMoney, translations } from '../i18n';
+import { hasPermission } from '../permissions';
 import { isValidVatNumber } from '../validation';
 
 export interface CartLine {
@@ -29,8 +31,30 @@ export interface CartLine {
   qty: number;
 }
 
+type HeldCartItem = { product_id: number; qty: number };
+
+/** Held carts are stored as JSON text; a damaged one must not crash the POS screen. */
+function parseHeldCartItems(itemsJson: string): HeldCartItem[] | null {
+  try {
+    const parsed: unknown = JSON.parse(itemsJson);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter(
+      (item): item is HeldCartItem =>
+        typeof item === 'object' &&
+        item !== null &&
+        Number.isInteger((item as HeldCartItem).product_id) &&
+        Number.isFinite((item as HeldCartItem).qty) &&
+        (item as HeldCartItem).qty > 0
+    );
+  } catch {
+    return null;
+  }
+}
+
 interface PosTerminalViewProps {
   lang: Language;
+  /** Buttons for discount, hold and new customer follow this user's permissions. */
+  currentUser: AuthUser;
   products: Product[];
   customers: Customer[];
   heldCarts: HeldCart[];
@@ -41,15 +65,15 @@ interface PosTerminalViewProps {
     cash_amount: number;
     discount_total: number;
     customer_id: number | null;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   onHoldCart: (payload: {
     label: string;
     items: Array<{ product_id: number; qty: number }>;
     discount: number;
     customer_id: number | null;
     invoice_subtype: InvoiceSubtype;
-  }) => Promise<void>;
-  onDeleteHeldCart: (id: number) => Promise<void>;
+  }) => Promise<boolean>;
+  onDeleteHeldCart: (id: number) => Promise<boolean>;
   onCreateCustomer: (payload: {
     name_ar: string;
     name_en: string;
@@ -65,6 +89,7 @@ interface PosTerminalViewProps {
 
 export function PosTerminalView({
   lang,
+  currentUser,
   products,
   customers,
   heldCarts,
@@ -79,6 +104,10 @@ export function PosTerminalView({
   const t = translations[lang];
   const isAr = lang === 'ar';
   const barcodeRef = useRef<HTMLInputElement>(null);
+  // The server enforces these too; hiding the controls keeps cashiers out of dead ends.
+  const canDiscount = hasPermission(currentUser, 'pos.discount');
+  const canHold = hasPermission(currentUser, 'pos.hold');
+  const canAddCustomer = hasPermission(currentUser, 'customers.manage');
 
   const [barcodeInput, setBarcodeInput] = useState('');
   const [search, setSearch] = useState('');
@@ -92,6 +121,9 @@ export function PosTerminalView({
   const [cashTendered, setCashTendered] = useState<string>('');
   const [discountInput, setDiscountInput] = useState<string>('0');
   const [submitting, setSubmitting] = useState(false);
+  const [holding, setHolding] = useState(false);
+  const [busyHeldCartId, setBusyHeldCartId] = useState<number | null>(null);
+  const [savingCustomer, setSavingCustomer] = useState(false);
   const [showHeldDrawer, setShowHeldDrawer] = useState(false);
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCustomer, setNewCustomer] = useState({
@@ -232,17 +264,18 @@ export function PosTerminalView({
         sum + line.product.sell_price * line.qty * (line.product.tax_rate / 100),
       0
     );
-    const discount = Math.min(
-      rawSubtotal,
-      Math.max(0, Number(discountInput) || 0)
-    );
+    // Without pos.discount the server refuses any discount, so none is applied
+    // here either (e.g. a held cart that someone else discounted).
+    const discount = canDiscount
+      ? Math.min(rawSubtotal, Math.max(0, Number(discountInput) || 0))
+      : 0;
     const ratio = rawSubtotal > 0 ? (rawSubtotal - discount) / rawSubtotal : 1;
     const subtotal = Number((rawSubtotal - discount).toFixed(2));
     const vat = Number((rawVat * ratio).toFixed(2));
     const grandTotal = Number((subtotal + vat).toFixed(2));
 
     return { subtotal, discount, vat, grandTotal };
-  }, [cart, discountInput]);
+  }, [cart, discountInput, canDiscount]);
 
   const cashReceivedNum = Number(cashTendered) || 0;
   const changeDue =
@@ -278,7 +311,7 @@ export function PosTerminalView({
 
     setSubmitting(true);
     try {
-      await onCheckout({
+      const ok = await onCheckout({
         items: cart.map((c) => ({ product_id: c.product.id, qty: c.qty })),
         invoice_subtype: invoiceSubtype,
         payment_method: paymentMethod,
@@ -291,57 +324,112 @@ export function PosTerminalView({
         discount_total: totals.discount,
         customer_id: invoiceSubtype === '0100000' ? customerId : null,
       });
-      setCart([]);
-      setDiscountInput('0');
-      setCashTendered('');
+      // H1: a rejected sale keeps the cart so the cashier can fix it and retry.
+      if (ok) {
+        setCart([]);
+        setDiscountInput('0');
+        setCashTendered('');
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleHoldCurrentCart = async () => {
-    if (cart.length === 0) return;
-    await onHoldCart({
-      label: isAr
-        ? `سلة معلقة (${cart.length} أصناف)`
-        : `Held Order (${cart.length} items)`,
-      items: cart.map((c) => ({ product_id: c.product.id, qty: c.qty })),
-      discount: Number(discountInput) || 0,
-      customer_id: customerId,
-      invoice_subtype: invoiceSubtype,
-    });
-    setCart([]);
-    setDiscountInput('0');
-    onNotify(isAr ? 'تم تعليق الفاتورة بنجاح' : 'Order placed on hold');
+    if (cart.length === 0 || holding) return;
+    setHolding(true);
+    try {
+      const ok = await onHoldCart({
+        label: isAr
+          ? `سلة معلقة (${cart.length} أصناف)`
+          : `Held Order (${cart.length} items)`,
+        items: cart.map((c) => ({ product_id: c.product.id, qty: c.qty })),
+        discount: totals.discount,
+        customer_id: customerId,
+        invoice_subtype: invoiceSubtype,
+      });
+      if (!ok) return;
+      setCart([]);
+      setDiscountInput('0');
+      onNotify(isAr ? 'تم تعليق الفاتورة بنجاح' : 'Order placed on hold');
+    } finally {
+      setHolding(false);
+    }
   };
 
   const handleResumeHeldCart = async (hc: HeldCart) => {
-    const parsed = JSON.parse(hc.items_json) as Array<{
-      product_id: number;
-      qty: number;
-    }>;
-    const restored: CartLine[] = [];
-    for (const item of parsed) {
-      const prod = products.find((p) => p.id === item.product_id);
-      if (prod && prod.stock_qty > 0) {
-        restored.push({
-          product: prod,
-          qty: Math.min(item.qty, prod.stock_qty),
-        });
-      }
+    if (busyHeldCartId !== null) return;
+    const items = parseHeldCartItems(hc.items_json);
+    if (!items) {
+      onNotify(
+        isAr ? 'تعذر قراءة الفاتورة المعلقة' : 'This held order could not be read',
+        'error'
+      );
+      return;
     }
-    setCart(restored);
-    setDiscountInput(String(hc.discount || 0));
-    setInvoiceSubtype(hc.invoice_subtype);
-    if (hc.customer_id) setCustomerId(hc.customer_id);
-    await onDeleteHeldCart(hc.id);
-    setShowHeldDrawer(false);
+    if (
+      cart.length > 0 &&
+      !window.confirm(
+        isAr
+          ? 'السلة الحالية ستُستبدل بالفاتورة المعلقة. هل تريد المتابعة؟'
+          : 'The current cart will be replaced by the held order. Continue?'
+      )
+    ) {
+      return;
+    }
+    setBusyHeldCartId(hc.id);
+    try {
+      // Remove it from the held list first, so the same order cannot be resumed twice.
+      if (!(await onDeleteHeldCart(hc.id))) return;
+      const restored: CartLine[] = [];
+      for (const item of items) {
+        const prod = products.find((p) => p.id === item.product_id);
+        if (prod && prod.stock_qty > 0) {
+          restored.push({
+            product: prod,
+            qty: Math.min(item.qty, prod.stock_qty),
+          });
+        }
+      }
+      setCart(restored);
+      setDiscountInput(String(hc.discount || 0));
+      setInvoiceSubtype(hc.invoice_subtype);
+      if (hc.customer_id) setCustomerId(hc.customer_id);
+      setShowHeldDrawer(false);
+    } finally {
+      setBusyHeldCartId(null);
+    }
+  };
+
+  const handleDiscardHeldCart = async (hc: HeldCart) => {
+    if (busyHeldCartId !== null) return;
+    if (
+      !window.confirm(
+        isAr ? `حذف "${hc.label}" نهائياً؟` : `Delete "${hc.label}" permanently?`
+      )
+    ) {
+      return;
+    }
+    setBusyHeldCartId(hc.id);
+    try {
+      await onDeleteHeldCart(hc.id);
+    } finally {
+      setBusyHeldCartId(null);
+    }
   };
 
   const handleSaveNewCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCustomer.name_ar.trim()) return;
-    const id = await onCreateCustomer(newCustomer);
+    if (!newCustomer.name_ar.trim() || savingCustomer) return;
+    setSavingCustomer(true);
+    let id = 0;
+    try {
+      id = await onCreateCustomer(newCustomer);
+    } finally {
+      setSavingCustomer(false);
+    }
+    // Keep the form open with what was typed when the customer was not saved.
+    if (!id) return;
     setCustomerId(id);
     setShowNewCustomer(false);
     setNewCustomer({
@@ -539,7 +627,7 @@ export function PosTerminalView({
             </h2>
           </div>
           <div className="flex items-center gap-2">
-            {heldCarts.length > 0 && (
+            {canHold && heldCarts.length > 0 && (
               <button
                 type="button"
                 onClick={() => setShowHeldDrawer(!showHeldDrawer)}
@@ -550,14 +638,17 @@ export function PosTerminalView({
             )}
             {cart.length > 0 && (
               <>
-                <button
-                  type="button"
-                  onClick={handleHoldCurrentCart}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white whitespace-nowrap shrink-0"
-                >
-                  <PauseCircle className="w-3.5 h-3.5" />
-                  {t.holdCart}
-                </button>
+                {canHold && (
+                  <button
+                    type="button"
+                    disabled={holding || submitting}
+                    onClick={() => void handleHoldCurrentCart()}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white whitespace-nowrap shrink-0 disabled:opacity-50"
+                  >
+                    <PauseCircle className="w-3.5 h-3.5" />
+                    {t.holdCart}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setCart([])}
@@ -571,7 +662,7 @@ export function PosTerminalView({
         </div>
 
         {/* Held Carts List */}
-        {showHeldDrawer && heldCarts.length > 0 && (
+        {canHold && showHeldDrawer && heldCarts.length > 0 && (
           <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-3 space-y-2">
             <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
               {t.heldOrders}
@@ -585,15 +676,18 @@ export function PosTerminalView({
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={() => handleResumeHeldCart(hc)}
-                    className="text-emerald-700 dark:text-emerald-400 font-semibold hover:underline"
+                    disabled={busyHeldCartId !== null}
+                    onClick={() => void handleResumeHeldCart(hc)}
+                    className="text-emerald-700 dark:text-emerald-400 font-semibold hover:underline disabled:opacity-50"
                   >
                     {t.resumeOrder}
                   </button>
                   <button
                     type="button"
-                    onClick={() => onDeleteHeldCart(hc.id)}
-                    className="text-slate-400 hover:text-red-600"
+                    disabled={busyHeldCartId !== null}
+                    onClick={() => void handleDiscardHeldCart(hc)}
+                    title={isAr ? 'حذف الفاتورة المعلقة' : 'Delete held order'}
+                    className="text-slate-400 hover:text-red-600 disabled:opacity-50"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -645,17 +739,20 @@ export function PosTerminalView({
                     </option>
                   ))}
                 </select>
-                <button
-                  type="button"
-                  onClick={() => setShowNewCustomer(!showNewCustomer)}
-                  className="p-2 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  title={t.addCustomer}
-                >
-                  <UserPlus className="w-4 h-4" />
-                </button>
+                {canAddCustomer && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCustomer(!showNewCustomer)}
+                    className="p-2 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    title={t.addCustomer}
+                    aria-label={t.addCustomer}
+                  >
+                    <UserPlus className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
-              {showNewCustomer && (
+              {canAddCustomer && showNewCustomer && (
                 <form
                   onSubmit={handleSaveNewCustomer}
                   className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-3 space-y-2"
@@ -690,7 +787,8 @@ export function PosTerminalView({
                     </button>
                     <button
                       type="submit"
-                      className="text-xs px-3 py-1 bg-emerald-700 text-white rounded font-medium"
+                      disabled={savingCustomer}
+                      className="text-xs px-3 py-1 bg-emerald-700 text-white rounded font-medium disabled:opacity-50"
                     >
                       {isAr ? 'حفظ' : 'Save'}
                     </button>
@@ -761,19 +859,22 @@ export function PosTerminalView({
 
         {/* Discount & Payment Method */}
         <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <label className="text-xs text-slate-600 dark:text-slate-400">
-              {t.discount}
-            </label>
-            <input
-              type="number"
-              min="0"
-              step="0.5"
-              value={discountInput}
-              onChange={(e) => setDiscountInput(e.target.value)}
-              className="w-24 text-end text-xs font-mono px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 tabular-nums"
-            />
-          </div>
+          {canDiscount && (
+            <div className="flex items-center justify-between gap-3">
+              <label htmlFor="pos-discount" className="text-xs text-slate-600 dark:text-slate-400">
+                {t.discount}
+              </label>
+              <input
+                id="pos-discount"
+                type="number"
+                min="0"
+                step="0.5"
+                value={discountInput}
+                onChange={(e) => setDiscountInput(e.target.value)}
+                className="w-24 text-end text-xs font-mono px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 tabular-nums"
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg">
             <button

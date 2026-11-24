@@ -47,16 +47,16 @@ interface InvoicesSettingsViewProps {
     amount: number;
     notes: string;
     voucher_date: string;
-  }) => Promise<void>;
-  onVoidVoucher: (id: number, reason: string) => Promise<void>;
+  }) => Promise<boolean>;
+  onVoidVoucher: (id: number, reason: string) => Promise<boolean>;
   onStockMovement: (payload: {
     product_id: number;
     type: 'purchase' | 'adjustment' | 'return';
     qty: number;
     notes: string;
     reference_no?: string;
-  }) => Promise<void>;
-  onUpdateSettings: (payload: Partial<OrganizationSettings>) => Promise<void>;
+  }) => Promise<boolean>;
+  onUpdateSettings: (payload: Partial<OrganizationSettings>) => Promise<boolean>;
   onCreateUser: (payload: {
     full_name: string;
     email: string;
@@ -290,6 +290,7 @@ export function InvoicesSettingsView({
       {tab === 'reports' && canReports ? (
         <ReportsCenterView
           lang={lang}
+          currentUser={currentUser}
           settings={settings}
           invoices={invoices}
           products={products}
