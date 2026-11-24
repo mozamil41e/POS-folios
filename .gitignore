@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local database files — never commit (contain users, sessions and keys)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
