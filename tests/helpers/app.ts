@@ -11,14 +11,34 @@ export interface TestApp {
   cleanup: () => void;
 }
 
+export interface TestAppOptions {
+  /** Use this database file instead of a fresh one (its directory is removed on cleanup). */
+  dbPath?: string;
+  /** Value of SETUP_TOKEN for this file. Unset by default (local-development behaviour). */
+  setupToken?: string;
+}
+
+/** Creates an empty temporary directory and returns the path of a database file inside it. */
+export function makeTempDbPath(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mizan-test-'));
+  return path.join(dir, 'test.db');
+}
+
 /**
- * Boots the real server module (server.ts) against a fresh temporary SQLite
+ * Boots the real server module (server.ts) against a temporary SQLite
  * database, seeded exactly like a new installation. Call it once per test file
  * in beforeAll — Vitest isolates modules per file, so every file gets its own DB.
+ * Environment variables are set explicitly because a worker process may be
+ * reused by another test file.
  */
-export async function createTestApp(): Promise<TestApp> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mizan-test-'));
-  process.env.MIZAN_DB_PATH = path.join(dir, 'test.db');
+export async function createTestApp(options: TestAppOptions = {}): Promise<TestApp> {
+  const dbPath = options.dbPath ?? makeTempDbPath();
+  process.env.MIZAN_DB_PATH = dbPath;
+  if (options.setupToken) {
+    process.env.SETUP_TOKEN = options.setupToken;
+  } else {
+    delete process.env.SETUP_TOKEN;
+  }
   const server = await import('../../server.ts');
   const { db } = await import('../../src/server/db.ts');
   return {
@@ -26,7 +46,8 @@ export async function createTestApp(): Promise<TestApp> {
     db,
     cleanup: () => {
       db.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      delete process.env.SETUP_TOKEN;
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
     },
   };
 }
@@ -39,7 +60,7 @@ export const ADMIN = {
   password: 'admin-pass-123',
 };
 
-/** Registers the first account, which the current code always makes an admin. */
+/** Completes first-run setup: creates the first (admin) account on an empty system. */
 export async function registerFirstAdmin(app: Express): Promise<string> {
   const res = await request(app).post('/api/auth/register').send(ADMIN);
   if (res.status !== 201) {

@@ -1,16 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  Eye,
-  EyeOff,
-  Globe,
-  Lock,
-  LogIn,
-  Mail,
-  Moon,
-  Sun,
-  User,
-  UserPlus,
-} from 'lucide-react';
+import { Eye, EyeOff, Globe, KeyRound, Lock, Mail, Moon, Sun, User } from 'lucide-react';
 import type { AuthUser, Language } from '../types';
 import { translations } from '../i18n';
 
@@ -22,7 +11,9 @@ interface AuthViewProps {
   onAuthSuccess: (token: string, user: AuthUser) => void;
 }
 
-type AuthMode = 'login' | 'register';
+// 'setup' is only available while the system has no users (first-run setup).
+// After that, accounts are created by an administrator — there is no self-registration.
+type AuthMode = 'login' | 'setup';
 
 export function AuthView({
   lang,
@@ -34,13 +25,10 @@ export function AuthView({
   const t = translations[lang];
   const isAr = lang === 'ar';
 
-  const initialModeFromPath: AuthMode =
-    typeof window !== 'undefined' && window.location.pathname === '/register'
-      ? 'register'
-      : 'login';
-
-  const [mode, setMode] = useState<AuthMode>(initialModeFromPath);
+  const [mode, setMode] = useState<AuthMode>('login');
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
+  const [setupToken, setSetupToken] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -53,13 +41,12 @@ export function AuthView({
     let active = true;
     fetch('/api/auth/status')
       .then((res) => res.json())
-      .then((body: { hasUsers?: boolean }) => {
+      .then((body: { hasUsers?: boolean; setupTokenRequired?: boolean }) => {
         if (!active) return;
         const exists = Boolean(body.hasUsers);
         setHasUsers(exists);
-        if (!exists) {
-          setMode('register');
-        }
+        setSetupTokenRequired(Boolean(body.setupTokenRequired));
+        setMode(exists ? 'login' : 'setup');
       })
       .catch(() => {
         if (active) setHasUsers(true);
@@ -69,17 +56,6 @@ export function AuthView({
       active = false;
     };
   }, []);
-
-  const switchMode = (nextMode: AuthMode) => {
-    setMode(nextMode);
-    setErrorMsg(null);
-    if (typeof window !== 'undefined') {
-      const targetPath = nextMode === 'register' ? '/register' : '/login';
-      if (window.location.pathname !== targetPath) {
-        window.history.replaceState({}, '', targetPath);
-      }
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +78,11 @@ export function AuthView({
       return;
     }
 
-    if (mode === 'register') {
+    if (mode === 'setup') {
+      if (setupTokenRequired && !setupToken.trim()) {
+        setErrorMsg(isAr ? 'يرجى إدخال رمز الإعداد' : 'Please enter the setup token.');
+        return;
+      }
       if (fullName.trim().length < 2) {
         setErrorMsg(
           isAr ? 'يرجى إدخال الاسم الكامل' : 'Please enter your full name.'
@@ -121,10 +101,10 @@ export function AuthView({
 
     setSubmitting(true);
     try {
-      const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const endpoint = mode === 'setup' ? '/api/auth/register' : '/api/auth/login';
       const payload =
-        mode === 'register'
-          ? { full_name: fullName.trim(), email: cleanEmail, password }
+        mode === 'setup'
+          ? { full_name: fullName.trim(), email: cleanEmail, password, setup_token: setupToken.trim() }
           : { email: cleanEmail, password };
 
       const res = await fetch(endpoint, {
@@ -135,17 +115,23 @@ export function AuthView({
 
       const body = (await res.json().catch(() => ({}))) as {
         error?: string;
+        code?: string;
         token?: string;
         user?: AuthUser;
       };
 
       if (!res.ok || !body.token || !body.user) {
-        if (res.status === 409) {
+        if (body.code === 'REGISTRATION_CLOSED') {
+          // Someone completed setup in the meantime — only sign-in remains.
+          setHasUsers(true);
+          setMode('login');
           setErrorMsg(
             isAr
-              ? 'هذا البريد الإلكتروني مسجل مسبقاً، يمكنك تسجيل الدخول'
-              : 'An account with this email already exists.'
+              ? 'تم إعداد النظام مسبقاً. سجّل الدخول، أو اطلب من مدير النظام إنشاء حسابك.'
+              : 'The system is already set up. Sign in, or ask an administrator to create your account.'
           );
+        } else if (body.code === 'INVALID_SETUP_TOKEN') {
+          setErrorMsg(isAr ? 'رمز الإعداد غير صحيح' : 'The setup token is incorrect.');
         } else if (res.status === 401) {
           setErrorMsg(
             isAr
@@ -216,8 +202,8 @@ export function AuthView({
                     ? 'تسجيل الدخول إلى ميزان POS'
                     : 'Sign in to Mizan POS'
                   : isAr
-                  ? 'إنشاء حساب جديد'
-                  : 'Create an Account'}
+                  ? 'إعداد النظام — إنشاء حساب المدير'
+                  : 'System setup — create the administrator'}
               </h1>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 {mode === 'login'
@@ -225,45 +211,18 @@ export function AuthView({
                     ? 'أدخل بيانات حسابك للوصول إلى نقطة البيع والمخزون والمشتريات'
                     : 'Enter your credentials to access POS, inventory, and purchases'
                   : isAr
-                  ? 'أنشئ حساباً جديداً للبدء في إدارة المبيعات والمخزون'
-                  : 'Register your account to start managing sales and inventory'}
+                  ? 'خطوة لمرة واحدة لإنشاء أول حساب مدير للنظام'
+                  : 'A one-time step to create the first administrator account'}
               </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-xl border border-slate-200/70 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => switchMode('login')}
-                className={`py-2 px-3 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                  mode === 'login'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                {isAr ? 'تسجيل الدخول' : 'Sign In'}
-              </button>
-              <button
-                type="button"
-                onClick={() => switchMode('register')}
-                className={`py-2 px-3 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                  mode === 'register'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                {isAr ? 'تسجيل جديد' : 'Register'}
-              </button>
             </div>
           </div>
 
           {/* First-time setup info */}
-          {hasUsers === false && mode === 'register' && (
+          {hasUsers === false && mode === 'setup' && (
             <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed">
               {isAr
-                ? 'مرحباً بك! لم يتم تسجيل أي مستخدم بعد — أول حساب يتم إنشاؤه سيحصل تلقائياً على صلاحيات مدير النظام.'
-                : 'Welcome! No users exist yet — the first registered account will be assigned Administrator privileges.'}
+                ? 'لا يوجد أي مستخدم بعد. هذا الحساب سيكون مدير النظام، وبعد إنشائه يُغلق التسجيل ويُنشئ المدير حسابات الموظفين من شاشة المستخدمين والصلاحيات.'
+                : 'No users exist yet. This account becomes the system administrator; afterwards registration closes and the administrator creates staff accounts from Users & Permissions.'}
             </div>
           )}
 
@@ -276,7 +235,32 @@ export function AuthView({
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'register' && (
+            {mode === 'setup' && setupTokenRequired && (
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  {isAr ? 'رمز الإعداد' : 'Setup Token'}
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3" />
+                  <input
+                    required
+                    type="password"
+                    dir="ltr"
+                    autoComplete="off"
+                    value={setupToken}
+                    onChange={(e) => setSetupToken(e.target.value)}
+                    className="w-full ps-9 pe-3 py-2.5 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:border-emerald-700"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {isAr
+                    ? 'القيمة المضبوطة في متغير البيئة SETUP_TOKEN على الخادم'
+                    : 'The value configured in the SETUP_TOKEN environment variable on the server'}
+                </p>
+              </div>
+            )}
+
+            {mode === 'setup' && (
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {isAr ? 'الاسم الكامل' : 'Full Name'}
@@ -347,7 +331,7 @@ export function AuthView({
               </div>
             </div>
 
-            {mode === 'register' && (
+            {mode === 'setup' && (
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {isAr ? 'تأكيد كلمة المرور' : 'Confirm Password'}
@@ -383,36 +367,20 @@ export function AuthView({
                   ? 'تسجيل الدخول'
                   : 'Sign In'
                 : isAr
-                ? 'إنشاء الحساب والدخول'
-                : 'Create Account'}
+                ? 'إنشاء حساب المدير والدخول'
+                : 'Create Administrator & Sign In'}
             </button>
           </form>
 
-          {/* Footer Switch Link */}
+          {/* Footer note — no self-registration */}
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-400">
-            {mode === 'login' ? (
-              <span>
-                {isAr ? 'ليس لديك حساب؟ ' : "Don't have an account? "}
-                <button
-                  type="button"
-                  onClick={() => switchMode('register')}
-                  className="font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
-                >
-                  {isAr ? 'سجل حساباً جديداً' : 'Create one'}
-                </button>
-              </span>
-            ) : (
-              <span>
-                {isAr ? 'لديك حساب بالفعل؟ ' : 'Already have an account? '}
-                <button
-                  type="button"
-                  onClick={() => switchMode('login')}
-                  className="font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
-                >
-                  {isAr ? 'تسجيل الدخول' : 'Sign in'}
-                </button>
-              </span>
-            )}
+            {mode === 'login'
+              ? isAr
+                ? 'ليس لديك حساب؟ يُنشئ مدير النظام حسابات الموظفين من شاشة المستخدمين والصلاحيات.'
+                : "Don't have an account? The administrator creates staff accounts from Users & Permissions."
+              : isAr
+              ? 'بعد إنشاء حساب المدير يُغلق التسجيل تلقائياً.'
+              : 'Registration closes automatically once the administrator account exists.'}
           </div>
         </div>
       </main>

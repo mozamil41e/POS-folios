@@ -96,7 +96,7 @@ Do not assume that the target structure exists yet.
   5. `setData` merges them
 
 **Known critical issues** (fix before any production use; see docs):
-- open registration
+- open registration (fixed in R1.2 on branch `r1/close-registration`; first-run setup needs `SETUP_TOKEN` in production)
 - read permissions not enforced on the server
 - secrets inside `/api/bootstrap`
 - reports computed from `LIMIT 100` data

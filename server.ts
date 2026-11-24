@@ -78,11 +78,42 @@ app.get('/api/public/invoices/:uuid', (req: Request, res: Response) => {
 
 // Public Authentication Routes
 app.get('/api/auth/status', (_req: Request, res: Response) => {
-  res.json({ hasUsers: hasAnyUsers() });
+  res.json({
+    hasUsers: hasAnyUsers(),
+    setupTokenRequired: Boolean(process.env.SETUP_TOKEN),
+  });
 });
 
+// When SETUP_TOKEN is configured (always in production), first-run setup must
+// present it. Without it (local development) setup stays open on an empty DB.
+function setupTokenMatches(provided: unknown): boolean {
+  const expected = process.env.SETUP_TOKEN;
+  if (!expected) return true;
+  if (typeof provided !== 'string' || provided.length === 0) return false;
+  const a = crypto.createHash('sha256').update(provided).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+const REGISTRATION_CLOSED_RESPONSE = {
+  error: 'Registration is closed. Ask an administrator to create your account.',
+  code: 'REGISTRATION_CLOSED',
+};
+
+// First-run setup only (SEC-01): creates the first administrator while the
+// users table is empty. Afterwards accounts are created by an admin via /api/users.
 app.post('/api/auth/register', (req: Request, res: Response) => {
+  if (hasAnyUsers()) {
+    res.status(403).json(REGISTRATION_CLOSED_RESPONSE);
+    return;
+  }
+
   const b = req.body as Record<string, unknown>;
+  if (!setupTokenMatches(b.setup_token)) {
+    res.status(403).json({ error: 'Invalid setup token.', code: 'INVALID_SETUP_TOKEN' });
+    return;
+  }
+
   const fullName = String(b.full_name ?? '').trim();
   const email = String(b.email ?? '').trim().toLowerCase();
   const password = typeof b.password === 'string' ? b.password : '';
@@ -102,13 +133,14 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
   try {
     const registerTx = db.transaction(() => {
-      const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-      if (existing) {
-        throw new Error('EMAIL_EXISTS');
+      // Re-checked inside the transaction so two simultaneous setup requests
+      // cannot both create an account.
+      const countRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
+      if (countRow.cnt > 0) {
+        throw new Error('REGISTRATION_CLOSED');
       }
 
-      const countRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
-      const targetSlug = countRow.cnt === 0 ? 'admin' : 'cashier';
+      const targetSlug = 'admin';
       const targetRole = getRoleBySlug(targetSlug);
       const now = new Date().toISOString();
       const passwordHash = hashPassword(password);
@@ -140,8 +172,8 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     const result = registerTx();
     res.status(201).json(result);
   } catch (err) {
-    if (err instanceof Error && err.message === 'EMAIL_EXISTS') {
-      res.status(409).json({ error: 'An account with this email already exists.' });
+    if (err instanceof Error && err.message === 'REGISTRATION_CLOSED') {
+      res.status(403).json(REGISTRATION_CLOSED_RESPONSE);
       return;
     }
     res.status(400).json({ error: 'Failed to create account.' });

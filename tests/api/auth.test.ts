@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { ADMIN, bearer, createTestApp, type TestApp } from '../helpers/app.ts';
 
-describe('auth (characterization)', () => {
+describe('auth & first-run setup (no SETUP_TOKEN configured)', () => {
   let t: TestApp;
 
   beforeAll(async () => {
@@ -10,39 +10,14 @@ describe('auth (characterization)', () => {
   });
   afterAll(() => t.cleanup());
 
-  it('reports no users on a fresh database', async () => {
+  it('reports an empty system that does not require a setup token', async () => {
     const res = await request(t.app).get('/api/auth/status');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ hasUsers: false });
+    expect(res.body).toEqual({ hasUsers: false, setupTokenRequired: false });
   });
 
-  it('makes the first registered account an admin with every permission', async () => {
-    const res = await request(t.app).post('/api/auth/register').send(ADMIN);
-    expect(res.status).toBe(201);
-    expect(res.body.token).toMatch(/^[0-9a-f]{64}$/);
-    expect(res.body.user.role).toBe('admin');
-    expect(res.body.user.permissions).toHaveLength(16);
-
-    const status = await request(t.app).get('/api/auth/status');
-    expect(status.body).toEqual({ hasUsers: true });
-  });
-
-  // CURRENT BEHAVIOUR (SEC-01): self-registration stays open after setup.
-  // R1.2 closes it — this test must then be flipped to expect 403.
-  it('CURRENT BEHAVIOUR: lets anyone self-register later accounts as cashiers', async () => {
-    const res = await request(t.app)
-      .post('/api/auth/register')
-      .send({ full_name: 'Stranger', email: 'stranger@test.local', password: 'stranger-pass' });
-    expect(res.status).toBe(201);
-    expect(res.body.user.role).toBe('cashier');
-  });
-
-  it('rejects a duplicate email with 409', async () => {
-    const res = await request(t.app).post('/api/auth/register').send(ADMIN);
-    expect(res.status).toBe(409);
-  });
-
-  it('validates registration input', async () => {
+  // Validation runs only while setup is still open (before the first account exists).
+  it('validates setup input', async () => {
     const shortPassword = await request(t.app)
       .post('/api/auth/register')
       .send({ full_name: 'Someone', email: 'someone@test.local', password: 'abc' });
@@ -57,6 +32,46 @@ describe('auth (characterization)', () => {
       .post('/api/auth/register')
       .send({ full_name: 'A', email: 'a@test.local', password: 'long-enough' });
     expect(shortName.status).toBe(400);
+
+    expect((await request(t.app).get('/api/auth/status')).body.hasUsers).toBe(false);
+  });
+
+  it('creates exactly one administrator when two setup requests arrive together', async () => {
+    const [first, second] = await Promise.all([
+      request(t.app).post('/api/auth/register').send(ADMIN),
+      request(t.app).post('/api/auth/register').send(ADMIN),
+    ]);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([201, 403]);
+
+    const created = first.status === 201 ? first : second;
+    expect(created.body.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(created.body.user.role).toBe('admin');
+    expect(created.body.user.permissions).toHaveLength(16);
+
+    const status = await request(t.app).get('/api/auth/status');
+    expect(status.body).toEqual({ hasUsers: true, setupTokenRequired: false });
+  });
+
+  // SEC-01 fixed in R1.2: self-registration is closed once any user exists.
+  it('rejects any further self-registration with 403 REGISTRATION_CLOSED', async () => {
+    const stranger = await request(t.app)
+      .post('/api/auth/register')
+      .send({ full_name: 'Stranger', email: 'stranger@test.local', password: 'stranger-pass' });
+    expect(stranger.status).toBe(403);
+    expect(stranger.body.code).toBe('REGISTRATION_CLOSED');
+    expect(stranger.body).not.toHaveProperty('token');
+
+    const sameEmail = await request(t.app).post('/api/auth/register').send(ADMIN);
+    expect(sameEmail.status).toBe(403);
+
+    const invalidInput = await request(t.app).post('/api/auth/register').send({});
+    expect(invalidInput.status).toBe(403);
+
+    const login = await request(t.app)
+      .post('/api/auth/login')
+      .send({ email: 'stranger@test.local', password: 'stranger-pass' });
+    expect(login.status).toBe(401);
   });
 
   it('rejects a wrong password with 401 and accepts the right one (email case-insensitive)', async () => {
