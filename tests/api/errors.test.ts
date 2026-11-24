@@ -88,28 +88,25 @@ describe('error handling (R1.5)', () => {
     expect((await request(t.app).get('/api/auth/status')).status).toBe(200);
   });
 
-  it('reports success when a step after saving the invoice fails (no double sale)', async () => {
+  // The R1.5 "failure after save" test hooked the ZATCA status update, which no
+  // longer exists since R1.4 (nothing runs after the sale is committed). A sale
+  // that fails inside its transaction leaves nothing behind:
+  it('leaves no invoice and no stock change when the sale itself fails', async () => {
     const before = await getBootstrap(t.app, adminToken);
     const stockBefore = before.products.find((p: { id: number }) => p.id === SEED.milk.id).stock_qty;
 
-    // The status update runs after the sale has been committed.
-    t.db.exec(
-      `CREATE TRIGGER fail_status_update BEFORE UPDATE OF zatca_status ON invoices
-       BEGIN SELECT RAISE(ABORT, 'simulated post-commit failure'); END;`
-    );
+    t.db.exec(`CREATE TRIGGER fail_invoice_items BEFORE INSERT ON invoice_items BEGIN SELECT RAISE(ABORT, 'simulated'); END;`);
     let res;
     try {
       res = await sell();
     } finally {
-      t.db.exec('DROP TRIGGER fail_status_update');
+      t.db.exec('DROP TRIGGER fail_invoice_items');
     }
 
-    expect(res.status).toBe(201);
-    expect(res.body.invoice.invoice_number).toMatch(/^INV-/);
-
+    expect(res.status).toBe(500);
     const after = await getBootstrap(t.app, adminToken);
-    expect(after.invoices.length).toBe(before.invoices.length + 1);
-    expect(after.products.find((p: { id: number }) => p.id === SEED.milk.id).stock_qty).toBe(stockBefore - 1);
+    expect(after.invoices.length).toBe(before.invoices.length);
+    expect(after.products.find((p: { id: number }) => p.id === SEED.milk.id).stock_qty).toBe(stockBefore);
   });
 
   it('still reports known business errors as 400 with their code', async () => {

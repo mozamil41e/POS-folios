@@ -24,7 +24,7 @@ The docs are in Arabic with English technical terms. Reply to the owner in Arabi
 |---|---|
 | A single restaurant, one deployment | Multi-tenant SaaS, plans, billing. These are a **separate project after delivery** |
 | Recipe-based inventory: selling a dish deducts its ingredients | Tables, kitchen tickets/KDS, item modifiers |
-| A local ZATCA Phase-1-style **5-field TLV QR** on receipts | **Any ZATCA integration**: CSID, signing, UBL XML, ICV/PIH, dispatch, ZATCA settings |
+| Receipt QR = **link to the public invoice page** (D1/D8); a 5-field ZATCA Phase-1 TLV QR may be added later if the accountant confirms it (D7) | **Any ZATCA integration**: CSID, signing, UBL XML, ICV/PIH, dispatch, ZATCA settings (removed in R1.4) |
 | Hostinger Business shared hosting with MariaDB | Docker or containers in production, Redis, WebSockets, background workers |
 
 The existing data is **demo only**. The database may be reset, after a backup.
@@ -84,7 +84,7 @@ Do not assume that the target structure exists yet.
 
 - `server.ts` (2,021 lines): every API route, with validation, business logic and SQL inline. It also hosts the Vite dev middleware and static serving.
 - `src/server/db.ts` (1,361 lines): schema creation, ad-hoc `ALTER` "migrations", **demo seeds**, queries, sessions, password hashing.
-- `src/server/zatca.ts`: UBL XML, signing and TLV QR. **To be removed (R1.4)**, except a tiny 5-field QR builder.
+- ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
 - `src/components/*View.tsx`: god components. `ReportsCenterView` is 3,206 lines and computes 25 reports in the browser.
 - Shared between client and server: `src/types.ts`, `src/permissions.ts`.
@@ -244,7 +244,7 @@ These facts come from Hostinger's support pages. Design around them:
   - recipe deduction
   - moving-average cost
   - document sequences
-  - QR TLV round-trip
+  - QR TLV round-trip (only if the Phase-1 tax QR is added later)
 - Integration tests run against **real MariaDB** (CI service / docker-compose): constraints, transactions, concurrency (two parallel sales), migrations `up/down/up`.
 - API tests (Supertest on `createApp()`): every route, the **permission matrix (route × role)**, error codes, idempotency.
 - E2E (Playwright): login → sale (cash, card, split) → print → hold/resume → credit note → purchase → daily report → void voucher.

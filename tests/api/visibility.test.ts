@@ -96,7 +96,7 @@ describe('read scoping by role (R1.3)', () => {
       collect(await request(t.app).get('/api/bootstrap').set(bearer(token)));
     }
     collect(await request(t.app).put('/api/settings').set(bearer(adminToken)).send({ table_page_size: 20 }));
-    collect(await request(t.app).post('/api/zatca/generate-keys').set(bearer(adminToken)));
+    collect(await request(t.app).get('/api/public/invoices/' + (await getBootstrap(t.app, adminToken)).invoices[0].uuid));
     const sale = await request(t.app).post('/api/invoices').set(bearer(adminToken)).send(cashSale(SEED.milk.id));
     collect(sale);
     collect(await request(t.app).post(`/api/invoices/${sale.body.invoice.id}/credit-note`).set(bearer(adminToken)));

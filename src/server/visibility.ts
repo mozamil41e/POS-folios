@@ -3,23 +3,20 @@
 // Every response that carries workspace data passes through scopeForUser():
 // - lists a user may not read are removed (rules in src/permissions.ts),
 // - product cost prices are removed for users without cost permission (D11),
-// - organisation settings never include secrets (private key, CSID secrets);
-//   the remaining ZATCA credential fields only go to zatca.manage holders until
-//   the ZATCA integration is removed in R1.4.
+// - organisation settings never include secrets. Since R1.4 (ZATCA removed) the
+//   settings table holds none; the legacy names stay blocked as a safety net in
+//   case an old, unmigrated database is ever served.
 import type { AuthUser, OrganizationSettings } from '../types.ts';
-import { DATA_VISIBILITY, canViewCost, canViewData, hasPermission, type VisibleDataKey } from '../permissions.ts';
+import { DATA_VISIBILITY, canViewCost, canViewData, type VisibleDataKey } from '../permissions.ts';
 
-const SECRET_SETTINGS_FIELDS = ['private_key_pem', 'ccsid_secret', 'pcsid_secret'] as const;
-const ZATCA_CREDENTIAL_FIELDS = [
+const LEGACY_SECRET_FIELDS = [
+  'private_key_pem',
+  'ccsid_secret',
+  'pcsid_secret',
   'ccsid_token',
-  'ccsid_request_id',
   'pcsid_token',
   'csr_pem',
-  'public_key_base64',
-  'last_pih',
 ] as const;
-
-export type PublicSettings = Omit<OrganizationSettings, (typeof SECRET_SETTINGS_FIELDS)[number]>;
 
 function omit<T extends object>(source: T, keys: readonly string[]): T {
   const copy = { ...source } as Record<string, unknown>;
@@ -27,11 +24,8 @@ function omit<T extends object>(source: T, keys: readonly string[]): T {
   return copy as T;
 }
 
-export function toPublicSettings(org: OrganizationSettings, user: AuthUser): PublicSettings {
-  const withoutSecrets = omit(org, SECRET_SETTINGS_FIELDS);
-  return hasPermission(user, 'zatca.manage')
-    ? withoutSecrets
-    : omit(withoutSecrets, ZATCA_CREDENTIAL_FIELDS);
+export function toPublicSettings(org: OrganizationSettings): OrganizationSettings {
+  return omit(org, LEGACY_SECRET_FIELDS);
 }
 
 function stripCost<T extends object>(product: T): T {
@@ -54,7 +48,7 @@ export function scopeForUser<T extends Record<string, unknown>>(user: AuthUser, 
     }
 
     if (key === 'settings' && value) {
-      scoped[key] = toPublicSettings(value as OrganizationSettings, user);
+      scoped[key] = toPublicSettings(value as OrganizationSettings);
     } else if (key === 'products' && Array.isArray(value) && !showCost) {
       scoped[key] = value.map((p) => stripCost(p as object));
     } else if (key === 'product' && value && typeof value === 'object' && !showCost) {

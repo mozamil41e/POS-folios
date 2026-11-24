@@ -59,7 +59,6 @@ interface PosTerminalViewProps {
     phone: string;
   }) => Promise<number>;
   onNotify: (msg: string, tone?: 'success' | 'error') => void;
-  zatcaEnabled?: boolean;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
 }
@@ -74,7 +73,6 @@ export function PosTerminalView({
   onDeleteHeldCart,
   onCreateCustomer,
   onNotify,
-  zatcaEnabled = false,
   isFullscreen = false,
   onToggleFullscreen,
 }: PosTerminalViewProps) {
@@ -866,8 +864,6 @@ export function PosTerminalView({
         >
           {submitting
             ? t.processing
-            : zatcaEnabled
-            ? t.checkoutBtn
             : t.checkoutBtnDirect}
         </button>
       </div>

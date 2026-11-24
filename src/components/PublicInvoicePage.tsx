@@ -144,9 +144,11 @@ export function PublicInvoicePage({ uuid }: { uuid: string }) {
         </div>
 
         {/* Digital Receipt Sheet */}
+        {/* print-full-page: printed from the customer's phone at full page width (D1),
+            unlike the in-app receipt which prints at thermal width. */}
         <div
           id="printable-invoice"
-          className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4"
+          className="print-full-page bg-white border border-slate-200 rounded-2xl p-6 space-y-4"
         >
           <div className="text-center border-b border-dashed border-slate-300 pb-4 space-y-1">
             <h1 className="text-lg font-bold text-slate-950">{store.name_ar}</h1>

@@ -99,7 +99,7 @@ const create = useCreateVoucher();
 - Use one `ReceiptTemplate` component for the preview, the print output and `/i/:uuid`. Today there are three copies: `InvoiceReceiptModal.tsx:134-294` and `:531-684`, and `PublicInvoicePage.tsx`.
 - Use one `printHtml()` in `web/lib/print.ts`: a sandboxed iframe (`allow-modals allow-same-origin`) with escaped values.
 - Host fonts locally; don't load Google Fonts.
-- Receipt QR: show the TLV QR that the server stores on the invoice (5 fields). Don't rebuild it in the browser.
+- Receipt QR: it encodes the absolute public invoice URL (`buildPublicInvoiceUrl`, D1/D8), so a phone camera opens `/i/:uuid`. The public page prints at full width (`.print-full-page`). A tax TLV QR may be added later (D7).
 
 ## Error handling & resilience
 - Put an app-level `<ErrorBoundary>` and a per-route boundary in place, and render under `<StrictMode>`.

@@ -47,7 +47,7 @@ describe('auth & first-run setup (no SETUP_TOKEN configured)', () => {
     const created = first.status === 201 ? first : second;
     expect(created.body.token).toMatch(/^[0-9a-f]{64}$/);
     expect(created.body.user.role).toBe('admin');
-    expect(created.body.user.permissions).toHaveLength(16);
+    expect(created.body.user.permissions).toHaveLength(15); // zatca.manage removed in R1.4
 
     const status = await request(t.app).get('/api/auth/status');
     expect(status.body).toEqual({ hasUsers: true, setupTokenRequired: false });

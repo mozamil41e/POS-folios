@@ -3,7 +3,6 @@ import QRCode from 'qrcode';
 import {
   Check,
   Copy,
-  Download,
   ExternalLink,
   Printer,
   RotateCcw,
@@ -63,17 +62,15 @@ export function InvoiceReceiptModal({
   }, [settings.thermal_width_mm]);
 
   const isAr = lang === 'ar';
-  const zatcaEnabled = settings.zatca_enabled === 1;
 
   const publicUrl = useMemo(() => {
     if (!invoice) return '';
     return buildPublicInvoiceUrl(invoice.uuid, settings.public_base_url);
   }, [invoice, settings.public_base_url]);
 
-  const qrValue = useMemo(() => {
-    if (!invoice) return '';
-    return zatcaEnabled ? invoice.qr_tlv_base64 : publicUrl;
-  }, [invoice, zatcaEnabled, publicUrl]);
+  // D1: scanning the receipt QR with a phone camera opens the public invoice page.
+  // (A ZATCA Phase-1 TLV QR may be added later, once the accountant confirms it — D7/D8.)
+  const qrValue = publicUrl;
 
   const publicHostLabel = useMemo(() => {
     if (!publicUrl) return '';
@@ -282,8 +279,8 @@ export function InvoiceReceiptModal({
     <div class="divider"></div>
     <div class="qr-wrap">
       <img src="${qrDataUrl}" alt="QR Code" />
-      <div class="bold">${zatcaEnabled ? (isAr ? 'رمز الفاتورة الإلكترونية (ZATCA)' : 'ZATCA E-Invoice QR') : (isAr ? 'امسح الرمز لعرض الفاتورة إلكترونياً' : 'Scan QR to view digital invoice')}</div>
-      ${!zatcaEnabled ? `<div class="mono muted">${escapeHtml(publicHostLabel)}</div>` : ''}
+      <div class="bold">${isAr ? 'امسح الرمز لعرض الفاتورة إلكترونياً' : 'Scan QR to view digital invoice'}</div>
+      <div class="mono muted">${escapeHtml(publicHostLabel)}</div>
     </div>
 
     <div class="footer-note">
@@ -337,7 +334,7 @@ export function InvoiceReceiptModal({
     } finally {
       setPrinting(false);
     }
-  }, [invoice, qrValue, format, isAr, lang, settings, paymentLabel, zatcaEnabled, publicHostLabel]);
+  }, [invoice, qrValue, format, isAr, lang, settings, paymentLabel, publicHostLabel]);
 
   useEffect(() => {
     if (invoice && autoPrint && autoPrintedIdRef.current !== invoice.id) {
@@ -365,16 +362,6 @@ export function InvoiceReceiptModal({
     : isAr
     ? 'فاتورة مبيعات / Sales Receipt'
     : 'Sales Receipt';
-
-  const handleDownloadXml = () => {
-    const blob = new Blob([invoice.xml_content], { type: 'application/xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${invoice.invoice_number}.xml`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   const handleCopyPublicUrl = async () => {
     await navigator.clipboard.writeText(publicUrl);
@@ -444,16 +431,6 @@ export function InvoiceReceiptModal({
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 {isAr ? 'إصدار إشعار مرتجع' : 'Credit Note'}
-              </button>
-            )}
-            {zatcaEnabled && (
-              <button
-                type="button"
-                onClick={handleDownloadXml}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
-              >
-                <Download className="w-3.5 h-3.5" />
-                UBL XML
               </button>
             )}
             <button
@@ -580,14 +557,6 @@ export function InvoiceReceiptModal({
                   <span className="font-mono tabular-nums">{invoice.related_invoice_number}</span>
                 </div>
               )}
-              {zatcaEnabled && (
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">ICV / ZATCA:</span>
-                  <span className="font-mono tabular-nums">
-                    #{invoice.icv} · {invoice.zatca_status}
-                  </span>
-                </div>
-              )}
             </div>
 
             {/* Line Items Table */}
@@ -650,36 +619,17 @@ export function InvoiceReceiptModal({
               <QrCodeCanvas
                 value={qrValue}
                 size={format === 'thermal58' ? 116 : format === 'thermal80' ? 136 : 156}
-                alt={zatcaEnabled ? 'ZATCA QR Code' : 'Public Invoice URL QR Code'}
+                alt="Public Invoice URL QR Code"
               />
-              {zatcaEnabled ? (
-                <>
-                  <div className="text-[11px] text-slate-600 font-medium">
-                    {isAr
-                      ? 'فاتورة إلكترونية متوافقة مع هيئة الزكاة والضريبة والجمارك'
-                      : 'ZATCA Phase 1 & 2 Compliant E-Invoice'}
-                  </div>
-                  <div className="w-full font-mono text-[10px] text-slate-400 break-all leading-relaxed pt-1">
-                    UUID: {invoice.uuid}
-                    <br />
-                    Hash: {invoice.invoice_hash.slice(0, 36)}...
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="text-[11px] text-slate-800 font-semibold pt-1">
-                    {isAr
-                      ? 'امسح الرمز لعرض الفاتورة إلكترونياً'
-                      : 'Scan QR to view digital invoice'}
-                  </div>
-                  <div dir="ltr" className="font-mono text-[10px] text-slate-500">
-                    {publicHostLabel}
-                  </div>
-                  <div className="text-[11px] text-slate-500 pt-1">
-                    {isAr ? 'شكراً لتسوقكم معنا' : 'Thank you for shopping with us'}
-                  </div>
-                </>
-              )}
+              <div className="text-[11px] text-slate-800 font-semibold pt-1">
+                {isAr ? 'امسح الرمز لعرض الفاتورة إلكترونياً' : 'Scan QR to view digital invoice'}
+              </div>
+              <div dir="ltr" className="font-mono text-[10px] text-slate-500">
+                {publicHostLabel}
+              </div>
+              <div className="text-[11px] text-slate-500 pt-1">
+                {isAr ? 'شكراً لتسوقكم معنا' : 'Thank you for shopping with us'}
+              </div>
             </div>
           </div>
         </div>

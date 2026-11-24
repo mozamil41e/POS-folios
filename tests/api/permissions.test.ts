@@ -22,8 +22,6 @@ const CASHIER_FORBIDDEN: Array<[Method, string]> = [
   ['get', '/api/roles'],
   ['post', '/api/roles'],
   ['put', '/api/settings'],
-  ['post', '/api/zatca/generate-keys'],
-  ['post', '/api/zatca/onboard'],
   ['post', '/api/products'],
   ['put', '/api/products/1'],
   ['delete', '/api/products/1'],
@@ -35,7 +33,6 @@ const CASHIER_FORBIDDEN: Array<[Method, string]> = [
   ['delete', '/api/vouchers/1'],
   ['post', '/api/vouchers/1/void'],
   ['post', '/api/invoices/1/credit-note'],
-  ['post', '/api/invoices/1/retry'],
 ];
 
 describe('permissions (characterization)', () => {

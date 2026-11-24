@@ -155,13 +155,6 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
         desc_en: 'Configure store info, thermal printer, font size, and pagination',
       },
       {
-        key: 'zatca.manage',
-        label_ar: 'إدارة هيئة الزكاة والضريبة ZATCA',
-        label_en: 'Manage ZATCA Compliance',
-        desc_ar: 'تهيئة مفاتيح التشفير CSID وإعادة إرسال الفواتير',
-        desc_en: 'Manage EGS onboarding keys and ZATCA invoice dispatch',
-      },
-      {
         key: 'users.manage',
         label_ar: 'إدارة المستخدمين والأدوار والصلاحيات',
         label_en: 'Manage Users, Roles & Permissions',
@@ -207,7 +200,7 @@ export const DATA_VISIBILITY = {
     'reports.view',
   ],
   customers: ['pos.access', 'sales.view', 'sales.return', 'customers.manage', 'reports.view'],
-  invoices: ['sales.view', 'sales.return', 'reports.view', 'zatca.manage'],
+  invoices: ['sales.view', 'sales.return', 'reports.view'],
   movements: ['inventory.view', 'inventory.manage', 'inventory.adjust', 'reports.view'],
   suppliers: ['purchases.view', 'purchases.manage', 'reports.view'],
   purchases: ['purchases.view', 'purchases.manage', 'reports.view'],

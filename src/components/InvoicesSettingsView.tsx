@@ -173,7 +173,6 @@ export function InvoicesSettingsView({
     public_base_url: settings.public_base_url,
     thermal_width_mm: settings.thermal_width_mm || 80,
     auto_print_receipt: settings.auto_print_receipt === 1,
-    zatca_enabled: settings.zatca_enabled === 1,
     font_size: (settings.font_size || 'medium') as FontSizeLevel,
     table_page_size: settings.table_page_size || 10,
   });
@@ -189,7 +188,6 @@ export function InvoicesSettingsView({
       public_base_url: settings.public_base_url,
       thermal_width_mm: settings.thermal_width_mm || 80,
       auto_print_receipt: settings.auto_print_receipt === 1,
-      zatca_enabled: settings.zatca_enabled === 1,
       font_size: (settings.font_size || 'medium') as FontSizeLevel,
       table_page_size: settings.table_page_size || 10,
     });
@@ -212,7 +210,6 @@ export function InvoicesSettingsView({
         public_base_url: form.public_base_url.trim().replace(/\/+$/, ''),
         thermal_width_mm: form.thermal_width_mm,
         auto_print_receipt: form.auto_print_receipt ? 1 : 0,
-        zatca_enabled: form.zatca_enabled ? 1 : 0,
         font_size: form.font_size,
         table_page_size: form.table_page_size,
       });
@@ -582,42 +579,21 @@ export function InvoicesSettingsView({
             </div>
           </div>
 
-          {/* Right Column: ZATCA Status Card (Disabled) */}
-          <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                {isAr ? 'حالة الربط مع هيئة الزكاة (ZATCA)' : 'ZATCA Integration Status'}
-              </h3>
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                {form.zatca_enabled
-                  ? isAr
-                    ? 'مفعل'
-                    : 'Enabled'
-                  : isAr
-                  ? 'معطل حالياً'
-                  : 'Disabled'}
-              </span>
-            </div>
-
+          {/* Right Column: what the receipt QR does (D1) */}
+          <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+              {isAr ? 'رمز QR في الإيصال' : 'Receipt QR code'}
+            </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
               {isAr
-                ? 'تم تعطيل الربط التلقائي والتوقيع الإلكتروني لهيئة الزكاة والضريبة والجمارك حالياً. تصدر الفواتير محلياً بشكل فوري مع رمز QR يحتوي على الرابط العام للفاتورة للطباعة الحرارية.'
-                : 'ZATCA cryptographic signing and API dispatch are currently disabled. Sales invoices are saved locally with a public URL QR code optimized for thermal receipt printing.'}
+                ? 'يحتوي رمز QR المطبوع على الإيصال رابط صفحة الفاتورة العامة. عند مسحه بكاميرا هاتف العميل تُفتح الفاتورة بتفاصيلها ويمكن طباعتها من الهاتف.'
+                : "The QR code printed on the receipt holds the link to the public invoice page. Scanning it with the customer's phone camera opens the invoice, which can be printed from the phone."}
             </p>
-
-            <label className="flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 cursor-pointer text-xs">
-              <span className="font-medium text-slate-700 dark:text-slate-200">
-                {isAr ? 'تفعيل ربط هيئة الزكاة (اختياري لاحقاً)' : 'Enable ZATCA Compliance (Optional)'}
-              </span>
-              <input
-                type="checkbox"
-                checked={form.zatca_enabled}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, zatca_enabled: e.target.checked }))
-                }
-                className="rounded border-slate-300 text-emerald-700 focus:ring-emerald-700"
-              />
-            </label>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              {isAr
+                ? 'يُبنى الرابط من حقل «الرابط الأساسي العام (Base URL)» أعلاه، أو من نطاق الموقع إذا تُرك فارغاً.'
+                : 'The link uses the "Public Base URL" field above, or the site domain when it is empty.'}
+            </p>
           </div>
         </form>
       )}

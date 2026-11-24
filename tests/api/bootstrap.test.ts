@@ -48,24 +48,18 @@ describe('GET /api/bootstrap (characterization)', () => {
     }
   });
 
-  // SEC-03 fixed in R1.3: settings never carry secrets; ZATCA credentials only
-  // reach zatca.manage holders (until ZATCA is removed in R1.4).
-  it('never sends secrets in settings, to any role', async () => {
+  // SEC-03 fixed in R1.3; since R1.4 the settings no longer hold any ZATCA data at all.
+  it('never sends secrets or ZATCA data in settings, to any role', async () => {
     for (const token of [adminToken, cashierToken]) {
       const { settings } = await getBootstrap(t.app, token);
-      expect(settings).not.toHaveProperty('private_key_pem');
-      expect(settings).not.toHaveProperty('ccsid_secret');
-      expect(settings).not.toHaveProperty('pcsid_secret');
+      for (const field of [
+        'private_key_pem', 'ccsid_secret', 'pcsid_secret', 'ccsid_token', 'pcsid_token',
+        'csr_pem', 'last_icv', 'last_pih', 'zatca_enabled', 'mode', 'egs_serial',
+      ]) {
+        expect(settings).not.toHaveProperty(field);
+      }
       expect(settings).toHaveProperty('name_ar');
       expect(settings).toHaveProperty('vat_number');
     }
-
-    const cashierSettings = (await getBootstrap(t.app, cashierToken)).settings;
-    expect(cashierSettings).not.toHaveProperty('ccsid_token');
-    expect(cashierSettings).not.toHaveProperty('pcsid_token');
-    expect(cashierSettings).not.toHaveProperty('csr_pem');
-
-    const adminSettings = (await getBootstrap(t.app, adminToken)).settings;
-    expect(adminSettings).toHaveProperty('pcsid_token');
   });
 });

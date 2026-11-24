@@ -55,7 +55,9 @@ describe('POST /api/invoices — checkout (characterization)', () => {
     expect(inv.grand_total).toBe(27);
     expect(inv.cash_amount).toBe(27);
     expect(inv.card_amount).toBe(0);
-    expect(inv.zatca_status).toBe('DISABLED');
+    for (const field of ['xml_content', 'invoice_hash', 'previous_hash', 'qr_tlv_base64', 'icv', 'zatca_status']) {
+      expect(inv).not.toHaveProperty(field); // ZATCA removed (R1.4)
+    }
 
     const milk = res.body.products.find((p: { id: number }) => p.id === SEED.milk.id);
     expect(milk.stock_qty).toBe(SEED.milk.stock - 2);

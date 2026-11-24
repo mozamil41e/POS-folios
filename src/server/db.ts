@@ -20,12 +20,6 @@ import type {
   Voucher,
 } from '../types.ts';
 import { ALL_PERMISSION_KEYS, sanitizePermissions } from '../permissions.ts';
-import {
-  GENESIS_PIH,
-  buildUbl21Xml,
-  generateEgsKeyPair,
-  signXmlAndBuildQr,
-} from './zatca.ts';
 import { nextDocumentNumber, syncDocumentSequences } from './sequences.ts';
 
 // MIZAN_DB_PATH lets automated tests use an isolated temporary database.
@@ -42,6 +36,102 @@ export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// Single definition of the invoices table, shared by CREATE TABLE and by the
+// R1.4 rebuild of older databases (ZATCA columns removed).
+function invoicesTableSql(name: string): string {
+  return `
+    CREATE TABLE IF NOT EXISTS ${name} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL UNIQUE,
+      invoice_number TEXT NOT NULL UNIQUE,
+      invoice_type_code TEXT NOT NULL DEFAULT '388',
+      invoice_subtype TEXT NOT NULL DEFAULT '0200000',
+      payment_method TEXT NOT NULL DEFAULT 'cash',
+      cash_amount REAL NOT NULL DEFAULT 0,
+      card_amount REAL NOT NULL DEFAULT 0,
+      customer_id INTEGER,
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_vat TEXT NOT NULL DEFAULT '',
+      subtotal REAL NOT NULL,
+      discount_total REAL NOT NULL DEFAULT 0,
+      vat_total REAL NOT NULL,
+      grand_total REAL NOT NULL,
+      related_invoice_number TEXT,
+      created_at TEXT NOT NULL
+    );`;
+}
+
+const INVOICE_COLUMNS = [
+  'id', 'uuid', 'invoice_number', 'invoice_type_code', 'invoice_subtype',
+  'payment_method', 'cash_amount', 'card_amount', 'customer_id', 'customer_name', 'customer_vat',
+  'subtotal', 'discount_total', 'vat_total', 'grand_total', 'related_invoice_number', 'created_at',
+] as const;
+
+const ZATCA_SETTINGS_COLUMNS = [
+  'egs_serial', 'mode', 'zatca_enabled', 'ccsid_token', 'ccsid_secret', 'ccsid_request_id',
+  'pcsid_token', 'pcsid_secret', 'private_key_pem', 'public_key_base64', 'csr_pem',
+  'onboarding_step', 'last_icv', 'last_pih',
+] as const;
+
+const ZATCA_INVOICE_COLUMNS = [
+  'icv', 'invoice_hash', 'previous_hash', 'qr_tlv_base64', 'xml_content',
+  'zatca_status', 'zatca_mode', 'zatca_response_json',
+] as const;
+
+function columnsOf(table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((c) => c.name));
+}
+
+/** Consistent copy of the whole database next to it (safe while the DB is open). */
+export function backupDatabase(label: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const target = `${DB_PATH}.backup-${label}-${stamp}.db`;
+  db.prepare('VACUUM INTO ?').run(target);
+  return target;
+}
+
+/**
+ * R1.4 (D13 option a): removes the ZATCA columns from a database created by an
+ * earlier version. Destructive, so it first writes a full backup, then runs in
+ * one transaction with foreign keys disabled (so invoice_items are not cascaded
+ * when the old invoices table is dropped) and verifies them afterwards.
+ * The invoices table is rebuilt because SQLite cannot drop its UNIQUE `icv`
+ * column in place. Does nothing on a database that is already clean.
+ */
+function removeZatcaSchema(): void {
+  const settingsCols = columnsOf('organization_settings');
+  const invoiceCols = columnsOf('invoices');
+  const legacySettings = ZATCA_SETTINGS_COLUMNS.filter((c) => settingsCols.has(c));
+  const legacyInvoices = ZATCA_INVOICE_COLUMNS.some((c) => invoiceCols.has(c));
+  if (legacySettings.length === 0 && !legacyInvoices) return;
+
+  const backupPath = backupDatabase('pre-zatca-removal');
+  console.log(`[migration] removing ZATCA schema; backup written to ${backupPath}`);
+
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      for (const column of legacySettings) {
+        db.exec(`ALTER TABLE organization_settings DROP COLUMN ${column}`);
+      }
+      if (legacyInvoices) {
+        const columns = INVOICE_COLUMNS.join(', ');
+        db.exec(invoicesTableSql('invoices_rebuilt'));
+        db.exec(`INSERT INTO invoices_rebuilt (${columns}) SELECT ${columns} FROM invoices`);
+        db.exec('DROP TABLE invoices');
+        db.exec('ALTER TABLE invoices_rebuilt RENAME TO invoices');
+      }
+      const violations = db.pragma('foreign_key_check') as unknown[];
+      if (violations.length > 0) {
+        throw new Error(`Foreign key check failed after ZATCA schema removal (${violations.length} rows).`);
+      }
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
+
 export function initDatabase(): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS organization_settings (
@@ -55,25 +145,11 @@ export function initDatabase(): void {
       city_ar TEXT NOT NULL,
       postal_code TEXT NOT NULL,
       country_code TEXT NOT NULL DEFAULT 'SA',
-      egs_serial TEXT NOT NULL,
-      mode TEXT NOT NULL DEFAULT 'simulator',
-      zatca_enabled INTEGER NOT NULL DEFAULT 0,
       public_base_url TEXT NOT NULL DEFAULT '',
       thermal_width_mm INTEGER NOT NULL DEFAULT 80,
       auto_print_receipt INTEGER NOT NULL DEFAULT 0,
       font_size TEXT NOT NULL DEFAULT 'medium',
-      table_page_size INTEGER NOT NULL DEFAULT 10,
-      ccsid_token TEXT NOT NULL DEFAULT '',
-      ccsid_secret TEXT NOT NULL DEFAULT '',
-      ccsid_request_id TEXT NOT NULL DEFAULT '',
-      pcsid_token TEXT NOT NULL DEFAULT '',
-      pcsid_secret TEXT NOT NULL DEFAULT '',
-      private_key_pem TEXT NOT NULL DEFAULT '',
-      public_key_base64 TEXT NOT NULL DEFAULT '',
-      csr_pem TEXT NOT NULL DEFAULT '',
-      onboarding_step INTEGER NOT NULL DEFAULT 1,
-      last_icv INTEGER NOT NULL DEFAULT 0,
-      last_pih TEXT NOT NULL
+      table_page_size INTEGER NOT NULL DEFAULT 10
     );
 
     CREATE TABLE IF NOT EXISTS products (
@@ -120,33 +196,7 @@ export function initDatabase(): void {
       created_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS invoices (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      uuid TEXT NOT NULL UNIQUE,
-      invoice_number TEXT NOT NULL UNIQUE,
-      icv INTEGER NOT NULL UNIQUE,
-      invoice_type_code TEXT NOT NULL DEFAULT '388',
-      invoice_subtype TEXT NOT NULL DEFAULT '0200000',
-      payment_method TEXT NOT NULL DEFAULT 'cash',
-      cash_amount REAL NOT NULL DEFAULT 0,
-      card_amount REAL NOT NULL DEFAULT 0,
-      customer_id INTEGER,
-      customer_name TEXT NOT NULL DEFAULT '',
-      customer_vat TEXT NOT NULL DEFAULT '',
-      subtotal REAL NOT NULL,
-      discount_total REAL NOT NULL DEFAULT 0,
-      vat_total REAL NOT NULL,
-      grand_total REAL NOT NULL,
-      invoice_hash TEXT NOT NULL,
-      previous_hash TEXT NOT NULL,
-      qr_tlv_base64 TEXT NOT NULL,
-      xml_content TEXT NOT NULL,
-      zatca_status TEXT NOT NULL,
-      zatca_mode TEXT NOT NULL,
-      zatca_response_json TEXT NOT NULL,
-      related_invoice_number TEXT,
-      created_at TEXT NOT NULL
-    );
+    ${invoicesTableSql('invoices')}
 
     CREATE TABLE IF NOT EXISTS invoice_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -284,9 +334,6 @@ export function initDatabase(): void {
     .all() as Array<{ name: string }>;
   const colNames = new Set(orgCols.map((c) => c.name));
 
-  if (!colNames.has('zatca_enabled')) {
-    db.exec('ALTER TABLE organization_settings ADD COLUMN zatca_enabled INTEGER NOT NULL DEFAULT 0');
-  }
   if (!colNames.has('public_base_url')) {
     db.exec("ALTER TABLE organization_settings ADD COLUMN public_base_url TEXT NOT NULL DEFAULT ''");
   }
@@ -334,6 +381,9 @@ export function initDatabase(): void {
     db.exec('ALTER TABLE vouchers ADD COLUMN voided_by INTEGER');
   }
 
+  // R1.4: drop the ZATCA columns from databases created by earlier versions.
+  removeZatcaSchema();
+
   // Never reissue a number that already exists in this database.
   syncDocumentSequences(db);
 
@@ -344,44 +394,21 @@ export function initDatabase(): void {
     .get();
 
   if (!existingOrg) {
-    const defaultOrgMeta = {
-      name_en: 'Al-Mizan Modern Retail Mart',
-      vat_number: '310122393500003',
-      egs_serial: '1-MZN|2-POS01|3-9f8a12b4',
-      city_ar: 'الرياض',
-    };
-    const keys = generateEgsKeyPair(defaultOrgMeta);
-
     db.prepare(`
       INSERT INTO organization_settings (
         id, name_ar, name_en, vat_number, cr_number, street_ar, building_no,
-        city_ar, postal_code, country_code, egs_serial, mode,
-        zatca_enabled, public_base_url, thermal_width_mm, auto_print_receipt, font_size, table_page_size,
-        ccsid_token, ccsid_secret, ccsid_request_id,
-        pcsid_token, pcsid_secret,
-        private_key_pem, public_key_base64, csr_pem,
-        onboarding_step, last_icv, last_pih
-      ) VALUES (
-        1, ?, ?, ?, ?, ?, ?, ?, ?, 'SA', ?, 'simulator',
-        0, '', 80, 0, 'medium', 10,
-        'CCSID-DEMO-884102', 'sec-demo-ccsid', '100049218',
-        'PCSID-MZN-994120', 'sec-demo-pcsid',
-        ?, ?, ?, 4, 0, ?
-      )
+        city_ar, postal_code, country_code,
+        public_base_url, thermal_width_mm, auto_print_receipt, font_size, table_page_size
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 'SA', '', 80, 0, 'medium', 10)
     `).run(
       'أسواق الميزان الحديثة للتجزئة',
-      defaultOrgMeta.name_en,
-      defaultOrgMeta.vat_number,
+      'Al-Mizan Modern Retail Mart',
+      '310122393500003',
       '1010648291',
       'طريق الملك فهد - حي العليا',
       '4218',
-      defaultOrgMeta.city_ar,
-      '12214',
-      defaultOrgMeta.egs_serial,
-      keys.privateKeyPem,
-      keys.publicKeyBase64,
-      keys.csrPem,
-      GENESIS_PIH
+      'الرياض',
+      '12214'
     );
   }
 
@@ -540,7 +567,6 @@ function seedInitialVouchers(): void {
 }
 
 function seedInitialInvoices(): void {
-  const org = getOrganizationSettings();
   const products = getAllProducts();
   const customers = getAllCustomers();
 
@@ -580,16 +606,10 @@ function seedInitialInvoices(): void {
     },
   ];
 
-  let currentPih = org.last_pih || GENESIS_PIH;
-  let currentIcv = org.last_icv || 0;
-
   for (const s of samples) {
-    currentIcv += 1;
     const uuid = crypto.randomUUID();
     const createdAtDate = new Date(Date.now() - s.offsetMinutes * 60_000);
     const createdAt = createdAtDate.toISOString();
-    const issueDate = createdAt.slice(0, 10);
-    const issueTime = createdAt.slice(11, 19);
     const invoiceNumber = nextDocumentNumber(db, 'INV');
 
     const items: InvoiceItem[] = s.lines.map((l) => {
@@ -620,67 +640,17 @@ function seedInitialInvoices(): void {
     const customerName = s.customer ? s.customer.name_ar : 'عميل نقدي / Cash Customer';
     const customerVat = s.customer ? s.customer.vat_number : '';
 
-    const xml = buildUbl21Xml({
-      uuid,
-      invoiceNumber,
-      icv: currentIcv,
-      previousHash: currentPih,
-      issueDate,
-      issueTime,
-      invoiceTypeCode: '388',
-      invoiceSubtype: s.subtype,
-      org,
-      customerName,
-      customerVat,
-      items,
-      subtotal,
-      discountTotal: 0,
-      vatTotal,
-      grandTotal,
-    });
-
-    const signed = signXmlAndBuildQr({
-      xml,
-      org,
-      timestampIso: createdAt,
-      grandTotal,
-      vatTotal,
-    });
-
-    const zatcaStatus = s.subtype === '0100000' ? 'CLEARED' : 'REPORTED';
-    const responseJson = JSON.stringify({
-      validationResults: {
-        infoMessages: [
-          {
-            type: 'INFO',
-            code: 'XSD_ZATCA_VALID',
-            category: 'XSD validation',
-            message: 'Complied with UBL 2.1 XSD and KSA-EN 16931 schematron rules.',
-            status: 'PASS',
-          },
-        ],
-        warningMessages: [],
-        errorMessages: [],
-        status: 'PASS',
-      },
-      reportingStatus: zatcaStatus === 'REPORTED' ? 'REPORTED' : undefined,
-      clearanceStatus: zatcaStatus === 'CLEARED' ? 'CLEARED' : undefined,
-    });
-
     const invInfo = db
       .prepare(`
         INSERT INTO invoices (
-          uuid, invoice_number, icv, invoice_type_code, invoice_subtype,
+          uuid, invoice_number, invoice_type_code, invoice_subtype,
           payment_method, cash_amount, card_amount, customer_id, customer_name, customer_vat,
-          subtotal, discount_total, vat_total, grand_total,
-          invoice_hash, previous_hash, qr_tlv_base64, xml_content,
-          zatca_status, zatca_mode, zatca_response_json, related_invoice_number, created_at
-        ) VALUES (?, ?, ?, '388', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'simulator', ?, NULL, ?)
+          subtotal, discount_total, vat_total, grand_total, related_invoice_number, created_at
+        ) VALUES (?, ?, '388', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
       `)
       .run(
         uuid,
         invoiceNumber,
-        currentIcv,
         s.subtype,
         s.payment,
         s.payment === 'cash' ? grandTotal : 0,
@@ -691,12 +661,6 @@ function seedInitialInvoices(): void {
         subtotal,
         vatTotal,
         grandTotal,
-        signed.invoiceHashBase64,
-        currentPih,
-        signed.qrTlvBase64,
-        xml,
-        zatcaStatus,
-        responseJson,
         createdAt
       );
 
@@ -726,12 +690,7 @@ function seedInitialInvoices(): void {
       );
     }
 
-    currentPih = signed.invoiceHashBase64;
   }
-
-  db.prepare(
-    'UPDATE organization_settings SET last_icv = ?, last_pih = ? WHERE id = 1'
-  ).run(currentIcv, currentPih);
 }
 
 function seedInitialSuppliersAndPurchases(): void {

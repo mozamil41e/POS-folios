@@ -27,11 +27,10 @@ import {
   InvoicesSettingsView,
   type ReportsSettingsSubTab,
 } from './components/InvoicesSettingsView';
-import { ZatcaCenterView } from './components/ZatcaCenterView';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 import { PublicInvoicePage } from './components/PublicInvoicePage';
 
-type ActiveSection = 'pos' | 'sales' | 'inventory' | 'purchases' | 'invoices' | 'zatca';
+type ActiveSection = 'pos' | 'sales' | 'inventory' | 'purchases' | 'invoices';
 
 interface ToastMessage {
   id: number;
@@ -137,7 +136,6 @@ function PosWorkspace({
 
   const t = translations[lang];
   const isAr = lang === 'ar';
-  const zatcaEnabled = data?.settings.zatca_enabled === 1;
 
   const allowedNavItems = useMemo(() => {
     const items: Array<[ActiveSection, string]> = [];
@@ -156,11 +154,8 @@ function PosWorkspace({
     if (hasAnyPermission(authUser, ['reports.view', 'settings.manage', 'users.manage'])) {
       items.push(['invoices', t.navInvoices]);
     }
-    if (zatcaEnabled && hasPermission(authUser, 'zatca.manage')) {
-      items.push(['zatca', t.navZatca]);
-    }
     return items;
-  }, [authUser, t, zatcaEnabled]);
+  }, [authUser, t]);
 
   useEffect(() => {
     if (allowedNavItems.length === 0) return;
@@ -318,12 +313,8 @@ function PosWorkspace({
       setReceiptInvoice(body.invoice);
       notify(
         isAr
-          ? `تم إصدار الفاتورة ${body.invoice.invoice_number}${
-              body.settings?.zatca_enabled === 1 ? ` (${body.invoice.zatca_status})` : ''
-            }`
-          : `Issued ${body.invoice.invoice_number}${
-              body.settings?.zatca_enabled === 1 ? ` (${body.invoice.zatca_status})` : ''
-            }`
+          ? `تم إصدار الفاتورة ${body.invoice.invoice_number}`
+          : `Issued ${body.invoice.invoice_number}`
       );
     }
   };
@@ -632,50 +623,7 @@ function PosWorkspace({
     }
     if (body.settings) {
       setData((prev) => (prev ? { ...prev, settings: body.settings! } : prev));
-      if (body.settings.zatca_enabled !== 1 && section === 'zatca') {
-        setSection('invoices');
-      } else if (body.settings.zatca_enabled === 1 && section === 'invoices') {
-        setSection('zatca');
-      }
       notify(isAr ? 'تم حفظ الإعدادات' : 'Settings saved');
-    }
-  };
-
-  const handleGenerateKeys = async () => {
-    const res = await apiFetch('/api/zatca/generate-keys', { method: 'POST' });
-    const body = (await res.json()) as { settings?: OrganizationSettings };
-    if (res.ok && body.settings) {
-      setData((prev) => (prev ? { ...prev, settings: body.settings! } : prev));
-      notify(isAr ? 'تم توليد مفاتيح secp256k1 وطلب CSR' : 'Generated secp256k1 keys & CSR');
-    }
-  };
-
-  const handleOnboardStep = async (
-    action: 'request_ccsid' | 'compliance_check' | 'request_pcsid',
-    otp?: string
-  ) => {
-    const res = await apiFetch('/api/zatca/onboard', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, otp }),
-    });
-    const body = (await res.json()) as { error?: string; settings?: OrganizationSettings };
-    if (!res.ok) {
-      notify(body.error || 'Onboarding step failed', 'error');
-      return;
-    }
-    if (body.settings) {
-      setData((prev) => (prev ? { ...prev, settings: body.settings! } : prev));
-      notify(isAr ? 'تم تنفيذ خطوة الربط بنجاح' : 'Onboarding step completed');
-    }
-  };
-
-  const handleRetryInvoice = async (id: number) => {
-    const res = await apiFetch(`/api/invoices/${id}/retry`, { method: 'POST' });
-    const body = (await res.json()) as { invoices?: Invoice[] };
-    if (res.ok && body.invoices) {
-      setData((prev) => (prev ? { ...prev, invoices: body.invoices! } : prev));
-      notify(isAr ? 'تمت إعادة إرسال الفاتورة لهيئة الزكاة' : 'Invoice re-dispatched to ZATCA');
     }
   };
 
@@ -994,14 +942,6 @@ function PosWorkspace({
               </span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{data.settings.vat_number}</span>
-              <span aria-hidden="true">·</span>
-              <span>
-                {!zatcaEnabled
-                  ? t.modeDirect
-                  : data.settings.mode === 'fatoora_simulation'
-                  ? t.modeFatoora
-                  : t.modeSimulator}
-              </span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1084,7 +1024,6 @@ function PosWorkspace({
                 products={data.products ?? []}
                 customers={data.customers ?? []}
                 heldCarts={data.heldCarts ?? []}
-                zatcaEnabled={zatcaEnabled}
                 isFullscreen={isSellOnlyFullscreen}
                 onToggleFullscreen={togglePosFullscreen}
                 onCheckout={handleCheckout}
@@ -1168,24 +1107,6 @@ function PosWorkspace({
                 onCreateRole={handleCreateRole}
                 onUpdateRole={handleUpdateRole}
                 onDeleteRole={handleDeleteRole}
-                onNotify={notify}
-              />
-            )}
-
-            {section === 'zatca' && zatcaEnabled && (
-              <ZatcaCenterView
-                lang={lang}
-                authToken={authToken}
-                settings={data.settings}
-                invoices={data.invoices ?? []}
-                onUpdateSettings={handleUpdateSettings}
-                onGenerateKeys={handleGenerateKeys}
-                onOnboardStep={handleOnboardStep}
-                onRetryInvoice={handleRetryInvoice}
-                onOpenReceipt={(inv) => {
-                  setAutoPrintModal(false);
-                  setReceiptInvoice(inv);
-                }}
                 onNotify={notify}
               />
             )}

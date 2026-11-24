@@ -31,13 +31,6 @@ import {
   verifyPassword,
 } from './src/server/db.ts';
 import {
-  buildUbl21Xml,
-  decodeZatcaTlvQr,
-  dispatchToZatca,
-  generateEgsKeyPair,
-  signXmlAndBuildQr,
-} from './src/server/zatca.ts';
-import {
   ALL_PERMISSION_KEYS,
   canViewData,
   sanitizePermissions,
@@ -61,7 +54,6 @@ import type {
   Supplier,
   VoucherChannel,
   VoucherType,
-  ZatcaMode,
 } from './src/types.ts';
 
 initDatabase();
@@ -710,7 +702,7 @@ app.post('/api/vouchers/:id/void', requirePermission('vouchers.manage'), (req: R
   res.json({ voucher: vouchers.find((v) => v.id === id), vouchers });
 });
 
-// Organization, Thermal Print & ZATCA settings
+// Organization (store) and thermal-print settings
 app.put('/api/settings', requirePermission('settings.manage'), (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const current = getOrganizationSettings();
@@ -723,15 +715,6 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
   const buildingNo = String(body.building_no ?? current.building_no).trim();
   const cityAr = String(body.city_ar ?? current.city_ar).trim();
   const postalCode = String(body.postal_code ?? current.postal_code).trim();
-  const egsSerial = String(body.egs_serial ?? current.egs_serial).trim();
-  const mode: ZatcaMode =
-    body.mode === 'fatoora_simulation' ? 'fatoora_simulation' : 'simulator';
-  const zatcaEnabled =
-    body.zatca_enabled === undefined
-      ? current.zatca_enabled
-      : body.zatca_enabled === true || body.zatca_enabled === 1 || body.zatca_enabled === '1'
-      ? 1
-      : 0;
   const thermalWidthMm =
     body.thermal_width_mm === undefined
       ? current.thermal_width_mm
@@ -791,7 +774,7 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
     UPDATE organization_settings
     SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?,
         street_ar = ?, building_no = ?, city_ar = ?, postal_code = ?,
-        egs_serial = ?, mode = ?, zatca_enabled = ?, public_base_url = ?,
+        public_base_url = ?,
         thermal_width_mm = ?, auto_print_receipt = ?, font_size = ?, table_page_size = ?
     WHERE id = 1
   `).run(
@@ -803,9 +786,6 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
     buildingNo,
     cityAr,
     postalCode,
-    egsSerial,
-    mode,
-    zatcaEnabled,
     publicBaseUrl,
     thermalWidthMm,
     autoPrintReceipt,
@@ -814,222 +794,6 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
   );
 
   sendScoped(res, { settings: getOrganizationSettings() });
-});
-
-// Generate real secp256k1 ECDSA keypair + ZATCA CSR
-app.post('/api/zatca/generate-keys', requirePermission('zatca.manage'), (_req: Request, res: Response) => {
-  const org = getOrganizationSettings();
-  const keys = generateEgsKeyPair({
-    name_en: org.name_en,
-    vat_number: org.vat_number,
-    egs_serial: org.egs_serial,
-    city_ar: org.city_ar,
-  });
-
-  const nextStep = Math.max(org.onboarding_step, 1);
-  db.prepare(`
-    UPDATE organization_settings
-    SET private_key_pem = ?, public_key_base64 = ?, csr_pem = ?, onboarding_step = ?
-    WHERE id = 1
-  `).run(keys.privateKeyPem, keys.publicKeyBase64, keys.csrPem, nextStep);
-
-  sendScoped(res, {
-    settings: getOrganizationSettings(),
-    message: 'Generated ECDSA secp256k1 keypair and ZATCA CSR.',
-  });
-});
-
-// Execute ZATCA onboarding steps (CCSID -> Compliance Check -> PCSID)
-app.post('/api/zatca/onboard', requirePermission('zatca.manage'), asyncHandler(async (req: Request, res: Response) => {
-  const body = req.body as Record<string, unknown>;
-  const action = String(body.action ?? '');
-  const otp = String(body.otp ?? '').trim();
-  const org = getOrganizationSettings();
-
-  if (action === 'request_ccsid') {
-    if (!org.csr_pem) {
-      res.status(400).json({ error: 'Generate secp256k1 keypair & CSR first.' });
-      return;
-    }
-    if (!otp || otp.length < 4) {
-      res.status(400).json({ error: 'Valid OTP from Fatoora Portal is required.' });
-      return;
-    }
-
-    if (org.mode === 'fatoora_simulation') {
-      try {
-        const response = await fetch(
-          'https://gw-fatoora.zatca.gov.sa/e-invoicing/simulation/compliance',
-          {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              'Accept-Version': 'V2',
-              OTP: otp,
-            },
-            body: JSON.stringify({
-              csr: Buffer.from(org.csr_pem, 'utf8').toString('base64'),
-            }),
-            signal: AbortSignal.timeout(8000),
-          }
-        );
-        const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-        if (!response.ok) {
-          res.status(400).json({
-            error:
-              typeof data.message === 'string'
-                ? data.message
-                : `ZATCA Simulation returned HTTP ${response.status}`,
-          });
-          return;
-        }
-        db.prepare(`
-          UPDATE organization_settings
-          SET ccsid_token = ?, ccsid_secret = ?, ccsid_request_id = ?, onboarding_step = 2
-          WHERE id = 1
-        `).run(
-          String(data.binarySecurityToken ?? ''),
-          String(data.secret ?? ''),
-          String(data.requestID ?? ''),
-        );
-        sendScoped(res, { settings: getOrganizationSettings(), apiResponse: data });
-        return;
-      } catch (err) {
-        res.status(502).json({
-          error:
-            err instanceof Error
-              ? `Fatoora Simulation API unreachable: ${err.message}`
-              : 'Fatoora Simulation API unreachable',
-        });
-        return;
-      }
-    }
-
-    // Protocol Simulator CCSID issuance
-    const simToken = `CCSID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-    const simSecret = crypto.randomBytes(12).toString('hex');
-    const simReqId = String(Math.floor(100000000 + Math.random() * 899999999));
-
-    db.prepare(`
-      UPDATE organization_settings
-      SET ccsid_token = ?, ccsid_secret = ?, ccsid_request_id = ?, onboarding_step = 2
-      WHERE id = 1
-    `).run(simToken, simSecret, simReqId);
-
-    sendScoped(res, {
-      settings: getOrganizationSettings(),
-      apiResponse: {
-        requestID: simReqId,
-        dispositionMessage: 'ISSUED',
-        binarySecurityToken: simToken,
-      },
-    });
-    return;
-  }
-
-  if (action === 'compliance_check') {
-    if (!org.ccsid_token) {
-      res.status(400).json({ error: 'Obtain Compliance CSID (CCSID) first.' });
-      return;
-    }
-
-    db.prepare('UPDATE organization_settings SET onboarding_step = 3 WHERE id = 1').run();
-    sendScoped(res, {
-      settings: getOrganizationSettings(),
-      checks: [
-        { type: 'Standard Tax Invoice (B2B 388)', status: 'PASS' },
-        { type: 'Simplified Tax Invoice (B2C 388)', status: 'PASS' },
-        { type: 'Credit Note (381)', status: 'PASS' },
-        { type: 'Debit Note (383)', status: 'PASS' },
-      ],
-    });
-    return;
-  }
-
-  if (action === 'request_pcsid') {
-    if (!org.ccsid_request_id) {
-      res.status(400).json({ error: 'Complete CCSID & compliance checks first.' });
-      return;
-    }
-
-    if (org.mode === 'fatoora_simulation' && org.ccsid_token && org.ccsid_secret) {
-      try {
-        const auth = Buffer.from(`${org.ccsid_token}:${org.ccsid_secret}`, 'utf8').toString('base64');
-        const response = await fetch(
-          'https://gw-fatoora.zatca.gov.sa/e-invoicing/simulation/production/csids',
-          {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              'Accept-Version': 'V2',
-              Authorization: `Basic ${auth}`,
-            },
-            body: JSON.stringify({
-              compliance_request_id: org.ccsid_request_id,
-            }),
-            signal: AbortSignal.timeout(8000),
-          }
-        );
-        const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-        if (!response.ok) {
-          res.status(400).json({
-            error:
-              typeof data.message === 'string'
-                ? data.message
-                : `ZATCA PCSID returned HTTP ${response.status}`,
-          });
-          return;
-        }
-        db.prepare(`
-          UPDATE organization_settings
-          SET pcsid_token = ?, pcsid_secret = ?, onboarding_step = 4
-          WHERE id = 1
-        `).run(String(data.binarySecurityToken ?? ''), String(data.secret ?? ''));
-        sendScoped(res, { settings: getOrganizationSettings(), apiResponse: data });
-        return;
-      } catch (err) {
-        res.status(502).json({
-          error:
-            err instanceof Error
-              ? `Fatoora Simulation API unreachable: ${err.message}`
-              : 'Fatoora Simulation API unreachable',
-        });
-        return;
-      }
-    }
-
-    const simPcsid = `PCSID-${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
-    const simPcsidSecret = crypto.randomBytes(16).toString('hex');
-    db.prepare(`
-      UPDATE organization_settings
-      SET pcsid_token = ?, pcsid_secret = ?, onboarding_step = 4
-      WHERE id = 1
-    `).run(simPcsid, simPcsidSecret);
-
-    sendScoped(res, {
-      settings: getOrganizationSettings(),
-      apiResponse: {
-        dispositionMessage: 'ISSUED',
-        binarySecurityToken: simPcsid,
-      },
-    });
-    return;
-  }
-
-  res.status(400).json({ error: 'Unknown onboarding action.' });
-}));
-
-// Decode TLV Base64 QR code
-app.post('/api/zatca/decode-qr', requirePermission('zatca.manage'), (req: Request, res: Response) => {
-  const qr = String((req.body as Record<string, unknown>).qr ?? '').trim();
-  if (!qr) {
-    res.status(400).json({ error: 'QR Base64 string is required.' });
-    return;
-  }
-  const tags = decodeZatcaTlvQr(qr);
-  res.json({ tags });
 });
 
 // Product CRUD
@@ -1559,7 +1323,7 @@ app.delete('/api/carts/hold/:id', requirePermission('pos.hold'), (req: Request, 
   res.json({ heldCarts: getHeldCarts() });
 });
 
-// Atomic POS Checkout -> Deduct Inventory + Generate UBL 2.1 XML + Sign + TLV QR + ZATCA Dispatch
+// Atomic POS checkout: price from the DB, deduct stock, issue the sales invoice (388)
 const CHECKOUT_ERROR_CODES: ReadonlySet<string> = new Set([
   'INVALID_QTY',
   'PRODUCT_NOT_FOUND',
@@ -1635,14 +1399,11 @@ app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (r
 
   try {
     const prepared = db.transaction(() => {
-      const org = getOrganizationSettings();
       const now = new Date();
       const createdAt = now.toISOString();
-      const issueDate = createdAt.slice(0, 10);
-      const issueTime = createdAt.slice(11, 19);
-      const nextIcv = (org.last_icv || 0) + 1;
+      // Random, unguessable id used by the public invoice link / receipt QR (D1).
       const uuid = crypto.randomUUID();
-      // Own yearly sequence (R1.8); ICV stays for the ZATCA chain only until R1.4.
+      // Own yearly sequence (R1.8).
       const invoiceNumber = nextDocumentNumber(db, 'INV');
 
       const lineItems: InvoiceItem[] = [];
@@ -1721,47 +1482,17 @@ app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (r
           ? Number((grandTotal - cashAmount).toFixed(2))
           : 0;
 
-      const xml = buildUbl21Xml({
-        uuid,
-        invoiceNumber,
-        icv: nextIcv,
-        previousHash: org.last_pih,
-        issueDate,
-        issueTime,
-        invoiceTypeCode,
-        invoiceSubtype,
-        org,
-        customerName,
-        customerVat,
-        items: lineItems,
-        subtotal,
-        discountTotal: effectiveDiscount,
-        vatTotal,
-        grandTotal,
-      });
-
-      const signed = signXmlAndBuildQr({
-        xml,
-        org,
-        timestampIso: createdAt,
-        grandTotal,
-        vatTotal,
-      });
-
       const invResult = db
         .prepare(`
           INSERT INTO invoices (
-            uuid, invoice_number, icv, invoice_type_code, invoice_subtype,
+            uuid, invoice_number, invoice_type_code, invoice_subtype,
             payment_method, cash_amount, card_amount, customer_id, customer_name, customer_vat,
-            subtotal, discount_total, vat_total, grand_total,
-            invoice_hash, previous_hash, qr_tlv_base64, xml_content,
-            zatca_status, zatca_mode, zatca_response_json, related_invoice_number, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, '{}', NULL, ?)
+            subtotal, discount_total, vat_total, grand_total, related_invoice_number, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
         `)
         .run(
           uuid,
           invoiceNumber,
-          nextIcv,
           invoiceTypeCode,
           invoiceSubtype,
           paymentMethod,
@@ -1774,11 +1505,6 @@ app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (r
           effectiveDiscount,
           vatTotal,
           grandTotal,
-          signed.invoiceHashBase64,
-          org.last_pih,
-          signed.qrTlvBase64,
-          xml,
-          org.mode,
           createdAt
         );
 
@@ -1809,63 +1535,13 @@ app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (r
         );
       }
 
-      db.prepare(
-        'UPDATE organization_settings SET last_icv = ?, last_pih = ? WHERE id = 1'
-      ).run(nextIcv, signed.invoiceHashBase64);
-
-      return {
-        invoiceId: Number(invResult.lastInsertRowid),
-        org,
-        uuid,
-        invoiceHashBase64: signed.invoiceHashBase64,
-        xml,
-        invoiceSubtype,
-        customerVat,
-      };
+      return { invoiceId: Number(invResult.lastInsertRowid) };
     });
 
+    // The invoice and its stock movements are committed once prepared() returns.
+    // Rule (R1.5): any follow-up step added here must log its failures instead of
+    // reporting a failed checkout, or the cashier would sell the same cart again.
     const result = prepared();
-
-    // The invoice and its stock movements are committed from here on. A failure
-    // in the follow-up steps must not be reported as a failed checkout, or the
-    // cashier would sell the same cart again (R1.5).
-    try {
-      if (result.org.zatca_enabled === 1) {
-        const zatcaRes = await dispatchToZatca({
-          org: result.org,
-          uuid: result.uuid,
-          invoiceHashBase64: result.invoiceHashBase64,
-          xml: result.xml,
-          invoiceSubtype: result.invoiceSubtype,
-          customerVat: result.customerVat,
-        });
-
-        db.prepare(`
-          UPDATE invoices
-          SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ?
-          WHERE id = ?
-        `).run(
-          zatcaRes.status,
-          zatcaRes.mode,
-          JSON.stringify(zatcaRes),
-          result.invoiceId
-        );
-      } else {
-        db.prepare(`
-          UPDATE invoices
-          SET zatca_status = 'DISABLED', zatca_response_json = ?
-          WHERE id = ?
-        `).run(
-          JSON.stringify({
-            disabled: true,
-            message: 'ZATCA integration is currently disabled.',
-          }),
-          result.invoiceId
-        );
-      }
-    } catch (err) {
-      console.error(`[checkout] post-commit step failed for invoice #${result.invoiceId}:`, err);
-    }
 
     const invoices = getAllInvoices();
     const createdInvoice = invoices.find((i) => i.id === result.invoiceId);
@@ -1887,42 +1563,7 @@ app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (r
   }
 }));
 
-// Retry ZATCA submission for pending/rejected invoice
-app.post('/api/invoices/:id/retry', requirePermission('zatca.manage'), asyncHandler(async (req: Request, res: Response) => {
-  const id = Number(req.params.id);
-  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as Invoice | undefined;
-  if (!inv) {
-    res.status(404).json({ error: 'Invoice not found.' });
-    return;
-  }
-
-  const org = getOrganizationSettings();
-  if (org.zatca_enabled !== 1) {
-    res.status(400).json({ error: 'ZATCA integration is currently disabled.' });
-    return;
-  }
-
-  const zatcaRes = await dispatchToZatca({
-    org,
-    uuid: inv.uuid,
-    invoiceHashBase64: inv.invoice_hash,
-    xml: inv.xml_content,
-    invoiceSubtype: inv.invoice_subtype,
-    customerVat: inv.customer_vat,
-  });
-
-  db.prepare(`
-    UPDATE invoices
-    SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ?
-    WHERE id = ?
-  `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), id);
-
-  sendScoped(res, {
-    invoices: getAllInvoices(),
-  });
-}));
-
-// Issue ZATCA Credit Note (381) for an existing invoice and return items to stock
+// Issue a credit note (381) for an existing sales invoice and return its items to stock
 app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asyncHandler(async (req: Request, res: Response) => {
   const sourceId = Number(req.params.id);
   const sourceInv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(sourceId) as Invoice | undefined;
@@ -1951,12 +1592,8 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
     .all(sourceId) as InvoiceItem[];
 
   const prepared = db.transaction(() => {
-    const org = getOrganizationSettings();
     const now = new Date();
     const createdAt = now.toISOString();
-    const issueDate = createdAt.slice(0, 10);
-    const issueTime = createdAt.slice(11, 19);
-    const nextIcv = (org.last_icv || 0) + 1;
     const uuid = crypto.randomUUID();
     // Credit notes have their own sequence (R1.8): they no longer consume invoice numbers.
     const invoiceNumber = nextDocumentNumber(db, 'CN');
@@ -1986,48 +1623,17 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
       }
     }
 
-    const xml = buildUbl21Xml({
-      uuid,
-      invoiceNumber,
-      icv: nextIcv,
-      previousHash: org.last_pih,
-      issueDate,
-      issueTime,
-      invoiceTypeCode: '381',
-      invoiceSubtype: sourceInv.invoice_subtype,
-      relatedInvoiceNumber: sourceInv.invoice_number,
-      org,
-      customerName: sourceInv.customer_name,
-      customerVat: sourceInv.customer_vat,
-      items: sourceItems,
-      subtotal: sourceInv.subtotal,
-      discountTotal: sourceInv.discount_total,
-      vatTotal: sourceInv.vat_total,
-      grandTotal: sourceInv.grand_total,
-    });
-
-    const signed = signXmlAndBuildQr({
-      xml,
-      org,
-      timestampIso: createdAt,
-      grandTotal: sourceInv.grand_total,
-      vatTotal: sourceInv.vat_total,
-    });
-
     const info = db
       .prepare(`
         INSERT INTO invoices (
-          uuid, invoice_number, icv, invoice_type_code, invoice_subtype,
+          uuid, invoice_number, invoice_type_code, invoice_subtype,
           payment_method, cash_amount, card_amount, customer_id, customer_name, customer_vat,
-          subtotal, discount_total, vat_total, grand_total,
-          invoice_hash, previous_hash, qr_tlv_base64, xml_content,
-          zatca_status, zatca_mode, zatca_response_json, related_invoice_number, created_at
-        ) VALUES (?, ?, ?, '381', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, '{}', ?, ?)
+          subtotal, discount_total, vat_total, grand_total, related_invoice_number, created_at
+        ) VALUES (?, ?, '381', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         uuid,
         invoiceNumber,
-        nextIcv,
         sourceInv.invoice_subtype,
         sourceInv.payment_method,
         sourceInv.cash_amount,
@@ -2039,11 +1645,6 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
         sourceInv.discount_total,
         sourceInv.vat_total,
         sourceInv.grand_total,
-        signed.invoiceHashBase64,
-        org.last_pih,
-        signed.qrTlvBase64,
-        xml,
-        org.mode,
         sourceInv.invoice_number,
         createdAt
       );
@@ -2075,54 +1676,12 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
       );
     }
 
-    db.prepare('UPDATE organization_settings SET last_icv = ?, last_pih = ? WHERE id = 1').run(
-      nextIcv,
-      signed.invoiceHashBase64
-    );
-
-    return {
-      invoiceId: Number(info.lastInsertRowid),
-      org,
-      uuid,
-      invoiceHashBase64: signed.invoiceHashBase64,
-      xml,
-      invoiceSubtype: sourceInv.invoice_subtype,
-      customerVat: sourceInv.customer_vat,
-    };
+    return { invoiceId: Number(info.lastInsertRowid) };
   });
 
+  // Committed once prepared() returns (credit note + restocking). Any follow-up
+  // step added later must log its failures, not report a failed credit note (R1.5).
   const result = prepared();
-
-  // The credit note and the restocking are committed from here on: a failure in
-  // the follow-up steps must not be reported as a failed credit note (R1.5).
-  try {
-    if (result.org.zatca_enabled === 1) {
-      const zatcaRes = await dispatchToZatca({
-        org: result.org,
-        uuid: result.uuid,
-        invoiceHashBase64: result.invoiceHashBase64,
-        xml: result.xml,
-        invoiceSubtype: result.invoiceSubtype,
-        customerVat: result.customerVat,
-      });
-
-      db.prepare(`
-        UPDATE invoices SET zatca_status = ?, zatca_mode = ?, zatca_response_json = ? WHERE id = ?
-      `).run(zatcaRes.status, zatcaRes.mode, JSON.stringify(zatcaRes), result.invoiceId);
-    } else {
-      db.prepare(`
-        UPDATE invoices SET zatca_status = 'DISABLED', zatca_response_json = ? WHERE id = ?
-      `).run(
-        JSON.stringify({
-          disabled: true,
-          message: 'ZATCA integration is currently disabled.',
-        }),
-        result.invoiceId
-      );
-    }
-  } catch (err) {
-    console.error(`[credit-note] post-commit step failed for invoice #${result.invoiceId}:`, err);
-  }
 
   const invoices = getAllInvoices();
   sendScoped(res.status(201), {
@@ -2207,7 +1766,7 @@ async function startServer(): Promise<void> {
   app.use(errorHandler);
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`Mizan POS & ZATCA server running at http://0.0.0.0:${port}`);
+    console.log(`Mizan POS server running at http://0.0.0.0:${port}`);
   });
 }
 

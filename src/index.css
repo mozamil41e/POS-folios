@@ -57,4 +57,11 @@
     border: none !important;
     border-radius: 0 !important;
   }
+  /* Public invoice page (D1): customers print it from their phone on a normal
+     page, so it uses the full width instead of the 80mm thermal width. */
+  #printable-invoice.print-full-page {
+    position: static;
+    max-width: none !important;
+    padding: 8mm !important;
+  }
 }

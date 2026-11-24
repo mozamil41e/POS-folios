@@ -1,9 +1,9 @@
 export type Language = 'ar' | 'en';
-export type ZatcaMode = 'simulator' | 'fatoora_simulation';
+// Internal document codes kept until the R3 schema renames them to domain values
+// (document_type: invoice | credit_note, invoice_kind: simplified | tax).
 export type InvoiceTypeCode = '388' | '381' | '383';
 export type InvoiceSubtype = '0200000' | '0100000';
 export type PaymentMethod = 'cash' | 'card' | 'split';
-export type ZatcaStatus = 'REPORTED' | 'CLEARED' | 'PENDING' | 'REJECTED' | 'DISABLED';
 export type FontSizeLevel = 'small' | 'medium' | 'large';
 export type TablePageSize = 5 | 10 | 20 | 50;
 
@@ -18,27 +18,11 @@ export interface OrganizationSettings {
   city_ar: string;
   postal_code: string;
   country_code: string;
-  egs_serial: string;
-  mode: ZatcaMode;
-  zatca_enabled: number;
   public_base_url: string;
   thermal_width_mm: number;
   auto_print_receipt: number;
   font_size: FontSizeLevel;
   table_page_size: number;
-  // ZATCA credentials: only sent to zatca.manage holders (removed with ZATCA in R1.4).
-  ccsid_token: string;
-  ccsid_request_id: string;
-  pcsid_token: string;
-  public_key_base64: string;
-  csr_pem: string;
-  last_pih: string;
-  // Secrets: server-side only — never included in any API response (R1.3).
-  ccsid_secret?: string;
-  pcsid_secret?: string;
-  private_key_pem?: string;
-  onboarding_step: number;
-  last_icv: number;
 }
 
 export interface Product {
@@ -110,7 +94,6 @@ export interface Invoice {
   id: number;
   uuid: string;
   invoice_number: string;
-  icv: number;
   invoice_type_code: InvoiceTypeCode;
   invoice_subtype: InvoiceSubtype;
   payment_method: PaymentMethod;
@@ -123,13 +106,6 @@ export interface Invoice {
   discount_total: number;
   vat_total: number;
   grand_total: number;
-  invoice_hash: string;
-  previous_hash: string;
-  qr_tlv_base64: string;
-  xml_content: string;
-  zatca_status: ZatcaStatus;
-  zatca_mode: ZatcaMode;
-  zatca_response_json: string;
   related_invoice_number: string | null;
   created_at: string;
   items?: InvoiceItem[];
@@ -143,13 +119,6 @@ export interface HeldCart {
   customer_id: number | null;
   invoice_subtype: InvoiceSubtype;
   created_at: string;
-}
-
-export interface DecodedTlvTag {
-  tag: number;
-  label_ar: string;
-  label_en: string;
-  value: string;
 }
 
 export type PurchasePaymentStatus = 'paid' | 'credit' | 'partial';
@@ -216,7 +185,6 @@ export type PermissionKey =
   | 'reports.view'
   | 'vouchers.manage'
   | 'settings.manage'
-  | 'zatca.manage'
   | 'users.manage';
 
 export interface RoleRecord {
