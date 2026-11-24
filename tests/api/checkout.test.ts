@@ -176,14 +176,14 @@ describe('POST /api/invoices — checkout (characterization)', () => {
   });
 
   it('issues a B2B invoice for a registered customer with a valid VAT number', async () => {
-    // Seeded customer #1 has VAT 310488291000003.
+    // Demo customer #1 has VAT 300000000000013 (src/server/demo-data.ts).
     const res = await sell(
       adminToken,
       cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: '0100000', customer_id: 1 })
     );
     expect(res.status).toBe(201);
     expect(res.body.invoice.invoice_subtype).toBe('0100000');
-    expect(res.body.invoice.customer_vat).toBe('310488291000003');
+    expect(res.body.invoice.customer_vat).toBe('300000000000013');
   });
 
   it('rejects an unknown customer instead of silently using the cash customer', async () => {

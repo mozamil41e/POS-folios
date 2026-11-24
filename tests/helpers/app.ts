@@ -21,6 +21,12 @@ export interface TestAppOptions {
    * Set it to '1' to simulate clients behind Hostinger's proxy with X-Forwarded-For.
    */
   trustProxy?: string;
+  /**
+   * Load the demo workspace (src/server/demo-data.ts) into an empty database.
+   * Default true: most tests use its fixed catalogue (SEED). Production never
+   * has it (R1.7); pass false to test a real first start.
+   */
+  demoData?: boolean;
 }
 
 /** Creates an empty temporary directory and returns the path of a database file inside it. */
@@ -31,8 +37,9 @@ export function makeTempDbPath(): string {
 
 /**
  * Boots the real server module (server.ts) against a temporary SQLite
- * database, seeded exactly like a new installation. Call it once per test file
- * in beforeAll — Vitest isolates modules per file, so every file gets its own DB.
+ * database, plus the demo workspace unless `demoData: false`. Call it once per
+ * test file in beforeAll — Vitest isolates modules per file, so every file gets
+ * its own DB (a second call in the same file returns the same app and DB).
  * Environment variables are set explicitly because a worker process may be
  * reused by another test file.
  */
@@ -51,6 +58,11 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   }
   const server = await import('../../server.ts');
   const { db } = await import('../../src/server/db.ts');
+  if (options.demoData !== false) {
+    // Skipped automatically when the database already holds business data.
+    const { seedDemoData } = await import('../../src/server/demo-data.ts');
+    seedDemoData();
+  }
   return {
     app: server.app,
     db,

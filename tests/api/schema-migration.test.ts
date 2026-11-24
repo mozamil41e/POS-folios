@@ -119,11 +119,20 @@ describe('upgrading a pre-R1.4 database (ZATCA schema removal, D13-a)', () => {
 
   it('keeps working after the upgrade: new numbers continue, ids do not collide', async () => {
     const adminToken = await registerFirstAdmin(t.app);
+    // Production databases get no demo products (R1.7): add one to sell.
+    t.db
+      .prepare(
+        `INSERT INTO products (sku, name_ar, name_en, category_ar, category_en, unit_ar, unit_en, cost_price,
+           sell_price, tax_rate, tax_category, stock_qty, min_stock_alert, expiry_date, active, created_at, updated_at)
+         VALUES ('UPG-1', 'صنف', 'Item', 'عام', 'General', 'حبة', 'Pcs', 5, 10, 15, 'S', 10, 1, NULL, 1, ?, ?)`
+      )
+      .run(new Date().toISOString(), new Date().toISOString());
+    const productId = (t.db.prepare("SELECT id FROM products WHERE sku = 'UPG-1'").get() as { id: number }).id;
     const sale = await request(t.app)
       .post('/api/invoices')
       .set(bearer(adminToken))
       .send({
-        items: [{ product_id: 1, qty: 1 }],
+        items: [{ product_id: productId, qty: 1 }],
         invoice_subtype: '0200000',
         payment_method: 'cash',
         cash_amount: 0,

@@ -75,9 +75,10 @@ npm run lint         # oxlint (typescript-eslint does not support TS 7 yet)
 npm run typecheck    # tsc --noEmit
 npm test             # Vitest: tests/api (Node) + tests/ui (jsdom, opted in per file)
 npm run admin:create # create an admin from the command line
+npm run seed:dev     # load demo data into an EMPTY development DB (refuses in production)
 ```
 
-Planned in R1.7: `npm run seed:dev` (demo data in development only).
+Production always starts empty (R1.7): no demo products, customers or invoices, only the 4 default roles and a neutral settings row.
 
 ---
 
@@ -86,7 +87,7 @@ Planned in R1.7: `npm run seed:dev` (demo data in development only).
 Do not assume that the target structure exists yet.
 
 - `server.ts` (2,021 lines): every API route, with validation, business logic and SQL inline. It also hosts the Vite dev middleware and static serving.
-- `src/server/db.ts` (1,361 lines): schema creation, ad-hoc `ALTER` "migrations", **demo seeds**, queries, sessions, password hashing.
+- `src/server/db.ts`: schema creation, ad-hoc `ALTER` "migrations", queries, sessions, password hashing. Demo data lives in `src/server/demo-data.ts`; only `npm run seed:dev` and the tests load it (R1.7).
 - ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
 - `src/components/*View.tsx`: god components. `ReportsCenterView` is 3,206 lines and computes 25 reports in the browser.
