@@ -22,7 +22,7 @@ describe('GET /api/bootstrap (characterization)', () => {
   it('gives an admin the whole seeded workspace including users and roles', async () => {
     const body = await getBootstrap(t.app, adminToken);
     expect(Object.keys(body).sort()).toEqual(
-      ['customers', 'heldCarts', 'invoices', 'movements', 'products', 'purchases', 'roles', 'settings', 'suppliers', 'users', 'vouchers'].sort()
+      ['categories', 'customers', 'heldCarts', 'invoices', 'movements', 'products', 'purchases', 'roles', 'settings', 'suppliers', 'users', 'vouchers'].sort()
     );
     expect(body.products).toHaveLength(14);
     expect(body.customers).toHaveLength(3);
@@ -40,7 +40,7 @@ describe('GET /api/bootstrap (characterization)', () => {
   it('gives a cashier only POS, sales and stock data — no purchases, suppliers, vouchers or costs', async () => {
     const body = await getBootstrap(t.app, cashierToken);
     expect(Object.keys(body).sort()).toEqual(
-      ['customers', 'heldCarts', 'invoices', 'movements', 'products', 'settings'].sort()
+      ['categories', 'customers', 'heldCarts', 'invoices', 'movements', 'products', 'settings'].sort()
     );
     expect(body.products.length).toBe(14);
     for (const product of body.products) {

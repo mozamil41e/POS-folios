@@ -24,6 +24,14 @@ describe('describeApiError (R1.10)', () => {
     expect(describeApiError({ code: 'SKU_EXISTS' }, 'ar')).toBe('هذا الباركود مستخدم لصنف آخر');
   });
 
+  it('explains category errors (R1.11c)', () => {
+    expect(describeApiError({ code: 'CATEGORY_EXISTS' }, 'ar')).toBe('يوجد تصنيف بهذا الاسم');
+    expect(describeApiError({ code: 'CATEGORY_IN_USE', count: 3 }, 'ar')).toBe(
+      'لا يمكن حذف التصنيف: عليه 3 صنف. انقلها إلى تصنيف آخر أولاً'
+    );
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'category_id', reason: 'NOT_FOUND' }, 'ar')).toBe('التصنيف: غير موجود');
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

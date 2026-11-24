@@ -25,11 +25,26 @@ export interface OrganizationSettings {
   table_page_size: number;
 }
 
+/** A product category (R1.11c). Products keep a copy of its names for display. */
+export interface Category {
+  id: number;
+  name_ar: string;
+  name_en: string;
+  /** Order of the category tabs on the POS screen (ascending). */
+  sort_order: number;
+  /** Active products in this category. */
+  product_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Product {
   id: number;
   sku: string;
   name_ar: string;
   name_en: string;
+  /** Null only for legacy rows or inactive products whose category was deleted. */
+  category_id: number | null;
   category_ar: string;
   category_en: string;
   unit_ar: string;
@@ -256,6 +271,7 @@ export interface AuthUser {
 export interface BootstrapPayload {
   settings: OrganizationSettings;
   products?: Product[];
+  categories?: Category[];
   customers?: Customer[];
   suppliers?: Supplier[];
   purchases?: Purchase[];

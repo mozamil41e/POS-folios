@@ -24,7 +24,8 @@ export type InputReason =
   | 'INVALID_EMAIL'
   | 'INVALID_PHONE'
   | 'INVALID_DATE'
-  | 'INVALID_CHOICE';
+  | 'INVALID_CHOICE'
+  | 'NOT_FOUND';
 
 export class InputError extends Error {
   readonly field: string;
@@ -40,6 +41,8 @@ export const INPUT_LIMITS = {
   sku: 64,
   name: 120,
   category: 60,
+  maxSortOrder: 100_000,
+  maxCategories: 500,
   unit: 30,
   vatNumber: 15,
   crNumber: 30,
@@ -138,8 +141,6 @@ export interface ProductInput {
   sku: string;
   name_ar: string;
   name_en: string;
-  category_ar: string;
-  category_en: string;
   unit_ar: string;
   unit_en: string;
   cost_price: number;
@@ -157,8 +158,6 @@ export function parseProductInput(raw: Raw, existing?: Product): ProductInput {
     sku: text(raw, 'sku', INPUT_LIMITS.sku, existing?.sku ?? '', true),
     name_ar: nameAr,
     name_en: text(raw, 'name_en', INPUT_LIMITS.name, existing?.name_en ?? '') || nameAr,
-    category_ar: text(raw, 'category_ar', INPUT_LIMITS.category, existing?.category_ar ?? 'عام') || 'عام',
-    category_en: text(raw, 'category_en', INPUT_LIMITS.category, existing?.category_en ?? 'General') || 'General',
     unit_ar: text(raw, 'unit_ar', INPUT_LIMITS.unit, existing?.unit_ar ?? 'حبة') || 'حبة',
     unit_en: text(raw, 'unit_en', INPUT_LIMITS.unit, existing?.unit_en ?? 'Pcs') || 'Pcs',
     cost_price: amount(raw, 'cost_price', existing?.cost_price ?? 0, false),
@@ -238,4 +237,51 @@ export function parseMovementInput(raw: Raw): MovementInput {
     reference_no:
       text(raw, 'reference_no', INPUT_LIMITS.reference, '') || `STK-${Date.now().toString().slice(-6)}`,
   };
+}
+
+// ----------------------------------------------------------------- categories
+
+export interface CategoryInput {
+  name_ar: string;
+  name_en: string;
+}
+
+/** New category, or an update of `existing` (fields not sent keep their value). */
+export function parseCategoryInput(raw: Raw, existing?: CategoryInput): CategoryInput {
+  const nameAr = text(raw, 'name_ar', INPUT_LIMITS.category, existing?.name_ar ?? '', true).replace(/\s+/g, ' ');
+  return {
+    name_ar: nameAr,
+    name_en: text(raw, 'name_en', INPUT_LIMITS.category, existing?.name_en ?? '').replace(/\s+/g, ' ') || nameAr,
+  };
+}
+
+/** The full new order of the category tabs: every category id, once. */
+export function parseCategoryOrder(raw: Raw): number[] {
+  const ids = raw.ids;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > INPUT_LIMITS.maxCategories) {
+    throw new InputError('ids', 'REQUIRED', 'ids must list the categories in their new order.');
+  }
+  if (!ids.every((id) => Number.isInteger(id) && (id as number) > 0) || new Set(ids).size !== ids.length) {
+    throw new InputError('ids', 'INVALID_CHOICE', 'ids must be distinct category ids.');
+  }
+  return ids as number[];
+}
+
+/**
+ * How a product names its category: by id (the UI's dropdown), or by Arabic
+ * name for older clients (found or created). Null when neither is sent.
+ */
+export type CategoryRef = { id: number } | { name_ar: string; name_en: string } | null;
+
+export function parseCategoryRef(raw: Raw): CategoryRef {
+  if (raw.category_id !== undefined && raw.category_id !== null && raw.category_id !== '') {
+    const id = Number(raw.category_id);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new InputError('category_id', 'INVALID_NUMBER', 'category_id must be a category id.');
+    }
+    return { id };
+  }
+  const nameAr = text(raw, 'category_ar', INPUT_LIMITS.category, '');
+  if (!nameAr) return null;
+  return { name_ar: nameAr, name_en: text(raw, 'category_en', INPUT_LIMITS.category, '') };
 }

@@ -65,6 +65,7 @@ erDiagram
 |---|---|
 | `organization_settings` | صف واحد `CHECK (id = 1)`. يخلط بيانات المنشأة + إعدادات الطابعة/العرض + **أسرار ZATCA** (`private_key_pem`, `ccsid_secret`, `pcsid_secret`) + حالة التسلسل (`last_icv`, `last_pih`). يُقرأ بـ `SELECT *` ويُرسل للواجهة. معظم أعمدته ستُحذف مع إزالة ZATCA. |
 | `products` | `sku UNIQUE` جيد؛ `cost_price`/`sell_price` REAL؛ `stock_qty INTEGER` (لا كسور)؛ `tax_category` نص حر بلا CHECK؛ `expiry_date` نص. حذف ناعم عبر `active`. لا يصلح كما هو للمطعم (يخلط الطبق والمكوّن). |
+| `categories` | **أُضيف في R1.11ج.** `name_key` فريد (الاسم العربي بعد توحيد المسافات وحالة الأحرف)، `sort_order` لترتيب أزرار نقطة البيع. `products.category_id` يشير إليه (`ON DELETE SET NULL`، مفهرس)، والنصان `category_ar`/`category_en` نسخة عرض تُحدَّث عند إعادة التسمية حتى مخطط v1. الحذف ممنوع ما دامت عليه أصناف نشطة. |
 | `stock_movements` | `type` نص بلا CHECK؛ `reference_no` نص حر بدل مرجع منظم؛ لا `created_by`؛ لا تكلفة وحدة؛ `ON DELETE CASCADE` من المنتجات (يُفقد التاريخ لو حُذف منتج نهائياً). لا فهرس على `product_id`. |
 | `customers` | لا تحقق من صيغة الرقم الضريبي؛ لا حذف/تعطيل؛ لا `updated_at`. |
 | `invoices` | `uuid`, `invoice_number`, `icv` UNIQUE ✔. `customer_id` بلا FK. `related_invoice_number` نص بدل FK. 8 أعمدة ZATCA (`icv`, `invoice_hash`, `previous_hash`, `qr_tlv_base64`, `xml_content`, `zatca_status`, `zatca_mode`, `zatca_response_json`). لا `created_by`. لا مفتاح منع التكرار (idempotency). |

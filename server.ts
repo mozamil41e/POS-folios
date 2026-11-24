@@ -5,8 +5,11 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import {
+  categoryKey,
   createSessionForUser,
   db,
+  findOrCreateCategory,
+  getAllCategories,
   getAllCustomers,
   getAllInvoices,
   getAllProducts,
@@ -15,6 +18,7 @@ import {
   getAllSuppliers,
   getAllUsers,
   getAllVouchers,
+  getCategoryById,
   getHeldCarts,
   getOrganizationSettings,
   getPublicInvoiceByUuid,
@@ -46,11 +50,15 @@ import {
 } from './src/server/login-guard.ts';
 import {
   InputError,
+  parseCategoryInput,
+  parseCategoryOrder,
+  parseCategoryRef,
   parseCustomerInput,
   parseMovementInput,
   parseOpeningStock,
   parseProductInput,
   parseSupplierInput,
+  type CategoryRef,
 } from './src/server/input-rules.ts';
 import {
   contentSecurityPolicy,
@@ -61,6 +69,7 @@ import {
 } from './src/server/security.ts';
 import type {
   AuthUser,
+  Category,
   Customer,
   FontSizeLevel,
   Invoice,
@@ -366,6 +375,7 @@ app.get('/api/bootstrap', (_req: Request, res: Response) => {
     scopeForUser(authUser, {
       settings: getOrganizationSettings(),
       products: can('products') ? getAllProducts() : undefined,
+      categories: can('categories') ? getAllCategories() : undefined,
       customers: can('customers') ? getAllCustomers() : undefined,
       suppliers: can('suppliers') ? getAllSuppliers() : undefined,
       purchases: can('purchases') ? getAllPurchases() : undefined,
@@ -898,12 +908,11 @@ app.post('/api/products', requirePermission('inventory.manage'), (req: Request, 
   // R1.10 (SEC-19): every field validated; throws InputError -> 400 VALIDATION_FAILED.
   const input = parseProductInput(b);
   const stockQty = parseOpeningStock(b);
+  const categoryRef = parseCategoryRef(b);
   const {
     sku,
     name_ar: nameAr,
     name_en: nameEn,
-    category_ar: categoryAr,
-    category_en: categoryEn,
     unit_ar: unitAr,
     unit_en: unitEn,
     cost_price: costPrice,
@@ -922,20 +931,23 @@ app.post('/api/products', requirePermission('inventory.manage'), (req: Request, 
   const now = new Date().toISOString();
   try {
     const createTx = db.transaction(() => {
+      // Inside the transaction: a category created by name is rolled back with a failed product.
+      const category = resolveProductCategory(categoryRef);
       const info = db
         .prepare(`
           INSERT INTO products (
-            sku, name_ar, name_en, category_ar, category_en, unit_ar, unit_en,
+            sku, name_ar, name_en, category_id, category_ar, category_en, unit_ar, unit_en,
             cost_price, sell_price, tax_rate, tax_category, stock_qty, min_stock_alert,
             expiry_date, active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         `)
         .run(
           sku,
           nameAr,
           nameEn,
-          categoryAr,
-          categoryEn,
+          category.id,
+          category.name_ar,
+          category.name_en,
           unitAr,
           unitEn,
           costPrice,
@@ -964,6 +976,7 @@ app.post('/api/products', requirePermission('inventory.manage'), (req: Request, 
     sendScoped(res.status(201), {
       product,
       products: getAllProducts(),
+      categories: getAllCategories(),
       movements: getRecentMovements(80),
     });
   } catch (err) {
@@ -985,44 +998,163 @@ app.put('/api/products/:id', requirePermission('inventory.manage'), (req: Reques
   }
 
   // R1.10 (SEC-19): fields not sent keep their value; stock changes only through movements.
-  const input = parseProductInput(req.body as Record<string, unknown>, existing);
+  const b = req.body as Record<string, unknown>;
+  const input = parseProductInput(b, existing);
+  const categoryRef = parseCategoryRef(b);
   if (skuTaken(input.sku, id)) {
     res.status(409).json(SKU_EXISTS_RESPONSE);
     return;
   }
   const now = new Date().toISOString();
 
-  db.prepare(`
-    UPDATE products
-    SET sku = ?, name_ar = ?, name_en = ?, category_ar = ?, category_en = ?,
-        unit_ar = ?, unit_en = ?, cost_price = ?, sell_price = ?,
-        tax_rate = ?, tax_category = ?, min_stock_alert = ?, expiry_date = ?, updated_at = ?
-    WHERE id = ?
-  `).run(
-    input.sku,
-    input.name_ar,
-    input.name_en,
-    input.category_ar,
-    input.category_en,
-    input.unit_ar,
-    input.unit_en,
-    input.cost_price,
-    input.sell_price,
-    input.tax_rate,
-    input.tax_category,
-    input.min_stock_alert,
-    input.expiry_date,
-    now,
-    id
-  );
+  db.transaction(() => {
+    const category = resolveProductCategory(categoryRef, existing);
+    db.prepare(`
+      UPDATE products
+      SET sku = ?, name_ar = ?, name_en = ?, category_id = ?, category_ar = ?, category_en = ?,
+          unit_ar = ?, unit_en = ?, cost_price = ?, sell_price = ?,
+          tax_rate = ?, tax_category = ?, min_stock_alert = ?, expiry_date = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      input.sku,
+      input.name_ar,
+      input.name_en,
+      category.id,
+      category.name_ar,
+      category.name_en,
+      input.unit_ar,
+      input.unit_en,
+      input.cost_price,
+      input.sell_price,
+      input.tax_rate,
+      input.tax_category,
+      input.min_stock_alert,
+      input.expiry_date,
+      now,
+      id
+    );
+  })();
 
-  sendScoped(res, { products: getAllProducts() });
+  sendScoped(res, { products: getAllProducts(), categories: getAllCategories() });
 });
 
 app.delete('/api/products/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
   db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(id);
-  sendScoped(res, { products: getAllProducts() });
+  sendScoped(res, { products: getAllProducts(), categories: getAllCategories() });
+});
+
+// Product categories (R1.11c, option a approved by the owner).
+/**
+ * The category a product is saved under: the one chosen by id, one found or
+ * created by Arabic name (older clients), the product's current one, or
+ * "عام / General" for a new product without any.
+ */
+function resolveProductCategory(ref: CategoryRef, existing?: Product): Category {
+  if (ref && 'id' in ref) {
+    const category = getCategoryById(ref.id);
+    if (!category) throw new InputError('category_id', 'NOT_FOUND', 'Category not found.');
+    return category;
+  }
+  if (ref) return findOrCreateCategory(ref.name_ar, ref.name_en);
+  if (existing?.category_id) {
+    const current = getCategoryById(existing.category_id);
+    if (current) return current;
+  }
+  if (existing?.category_ar) return findOrCreateCategory(existing.category_ar, existing.category_en);
+  return findOrCreateCategory('عام', 'General');
+}
+
+const categoryNameTaken = (nameAr: string, exceptId = 0) =>
+  Boolean(db.prepare('SELECT id FROM categories WHERE name_key = ? AND id != ?').get(categoryKey(nameAr), exceptId));
+
+const CATEGORY_EXISTS_RESPONSE = {
+  error: 'A category with this name already exists.',
+  code: 'CATEGORY_EXISTS',
+  field: 'name_ar',
+};
+
+app.post('/api/categories', requirePermission('inventory.manage'), (req: Request, res: Response) => {
+  const input = parseCategoryInput(req.body as Record<string, unknown>);
+  if (categoryNameTaken(input.name_ar)) {
+    res.status(409).json(CATEGORY_EXISTS_RESPONSE);
+    return;
+  }
+  const category = findOrCreateCategory(input.name_ar, input.name_en);
+  sendScoped(res.status(201), { category, categories: getAllCategories() });
+});
+
+app.put('/api/categories/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const existing = getCategoryById(id);
+  if (!existing) {
+    res.status(404).json({ error: 'Category not found.', code: 'CATEGORY_NOT_FOUND' });
+    return;
+  }
+  const input = parseCategoryInput(req.body as Record<string, unknown>, existing);
+  if (categoryNameTaken(input.name_ar, id)) {
+    res.status(409).json(CATEGORY_EXISTS_RESPONSE);
+    return;
+  }
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare('UPDATE categories SET name_ar = ?, name_en = ?, name_key = ?, updated_at = ? WHERE id = ?').run(
+      input.name_ar,
+      input.name_en,
+      categoryKey(input.name_ar),
+      now,
+      id
+    );
+    // A rename reaches every product of the category (their display copy).
+    db.prepare('UPDATE products SET category_ar = ?, category_en = ?, updated_at = ? WHERE category_id = ?').run(
+      input.name_ar,
+      input.name_en,
+      now,
+      id
+    );
+  })();
+  sendScoped(res, { categories: getAllCategories(), products: getAllProducts() });
+});
+
+app.post('/api/categories/order', requirePermission('inventory.manage'), (req: Request, res: Response) => {
+  const ids = parseCategoryOrder(req.body as Record<string, unknown>);
+  const known = new Set(getAllCategories().map((c) => c.id));
+  if (ids.length !== known.size || !ids.every((id) => known.has(id))) {
+    res.status(400).json({
+      error: 'ids must list every category exactly once.',
+      code: 'VALIDATION_FAILED',
+      field: 'ids',
+      reason: 'INVALID_CHOICE',
+    });
+    return;
+  }
+  const setOrder = db.prepare('UPDATE categories SET sort_order = ? WHERE id = ?');
+  db.transaction(() => ids.forEach((id, index) => setOrder.run(index + 1, id)))();
+  sendScoped(res, { categories: getAllCategories() });
+});
+
+app.delete('/api/categories/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const existing = getCategoryById(id);
+  if (!existing) {
+    res.status(404).json({ error: 'Category not found.', code: 'CATEGORY_NOT_FOUND' });
+    return;
+  }
+  // Option (a): never leave active products without a category; move them first.
+  if (existing.product_count > 0) {
+    res.status(409).json({
+      error: `This category still has ${existing.product_count} product(s). Move them to another category first.`,
+      code: 'CATEGORY_IN_USE',
+      count: existing.product_count,
+    });
+    return;
+  }
+  // Hidden (deleted) products keep the old name as text; their link is cleared.
+  db.transaction(() => {
+    db.prepare('UPDATE products SET category_id = NULL WHERE category_id = ?').run(id);
+    db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+  })();
+  sendScoped(res, { categories: getAllCategories() });
 });
 
 // Inventory movement (purchase / adjustment / return)

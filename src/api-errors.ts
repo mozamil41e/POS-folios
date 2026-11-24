@@ -12,6 +12,8 @@ export interface ApiErrorBody {
   field?: string;
   reason?: string;
   available?: number;
+  /** Products still in a category that cannot be deleted. */
+  count?: number;
 }
 
 type Bilingual = { ar: string; en: string };
@@ -40,6 +42,8 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   qty: { ar: 'الكمية', en: 'Quantity' },
   notes: { ar: 'الملاحظات', en: 'Notes' },
   reference_no: { ar: 'رقم المرجع', en: 'Reference' },
+  category_id: { ar: 'التصنيف', en: 'Category' },
+  ids: { ar: 'ترتيب التصنيفات', en: 'Category order' },
 };
 
 const REASONS: Record<string, Bilingual> = {
@@ -59,6 +63,7 @@ const REASONS: Record<string, Bilingual> = {
   INVALID_PHONE: { ar: 'أرقام ومسافات و + و - فقط', en: 'may contain digits, spaces, + and - only' },
   INVALID_DATE: { ar: 'تاريخ غير صحيح', en: 'is not a valid date' },
   INVALID_CHOICE: { ar: 'قيمة غير مسموحة', en: 'is not an allowed value' },
+  NOT_FOUND: { ar: 'غير موجود', en: 'was not found' },
 };
 
 export function describeApiError(body: ApiErrorBody | null | undefined, lang: Language): string | null {
@@ -74,6 +79,14 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
     }
     case 'SKU_EXISTS':
       return isAr ? 'هذا الباركود مستخدم لصنف آخر' : 'This SKU / barcode is already used by another product';
+    case 'CATEGORY_EXISTS':
+      return isAr ? 'يوجد تصنيف بهذا الاسم' : 'A category with this name already exists';
+    case 'CATEGORY_IN_USE':
+      return typeof body.count === 'number'
+        ? isAr
+          ? `لا يمكن حذف التصنيف: عليه ${body.count} صنف. انقلها إلى تصنيف آخر أولاً`
+          : `Cannot delete: ${body.count} product(s) still use this category. Move them first`
+        : null;
     case 'INSUFFICIENT_STOCK':
       return typeof body.available === 'number'
         ? isAr

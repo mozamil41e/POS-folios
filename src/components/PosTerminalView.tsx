@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type {
   AuthUser,
+  Category,
   Customer,
   HeldCart,
   InvoiceSubtype,
@@ -32,6 +33,8 @@ export interface CartLine {
 }
 
 type HeldCartItem = { product_id: number; qty: number };
+
+const NO_CATEGORIES: Category[] = [];
 
 /** Held carts are stored as JSON text; a damaged one must not crash the POS screen. */
 function parseHeldCartItems(itemsJson: string): HeldCartItem[] | null {
@@ -56,6 +59,8 @@ interface PosTerminalViewProps {
   /** Buttons for discount, hold and new customer follow this user's permissions. */
   currentUser: AuthUser;
   products: Product[];
+  /** Gives the order of the category tabs (Inventory > Categories). */
+  categories?: Category[];
   customers: Customer[];
   heldCarts: HeldCart[];
   onCheckout: (payload: {
@@ -91,6 +96,7 @@ export function PosTerminalView({
   lang,
   currentUser,
   products,
+  categories: categoryList = NO_CATEGORIES,
   customers,
   heldCarts,
   onCheckout,
@@ -163,11 +169,20 @@ export function PosTerminalView({
         map.set(p.category_ar, { ar: p.category_ar, en: p.category_en });
       }
     }
-    return Array.from(map.entries()).map(([key, val]) => ({
-      key,
-      label: isAr ? val.ar : val.en,
-    }));
-  }, [products, isAr]);
+    // Tabs follow the order set in Inventory > Categories (R1.11c); names not
+    // found there (older data) keep their first-seen order at the end.
+    const order = new Map(categoryList.map((c) => [c.name_ar, c.sort_order]));
+    const firstSeen = Array.from(map.keys());
+    return Array.from(map.entries())
+      .sort(([a], [b]) => {
+        const byOrder = (order.get(a) ?? Number.MAX_SAFE_INTEGER) - (order.get(b) ?? Number.MAX_SAFE_INTEGER);
+        return byOrder !== 0 ? byOrder : firstSeen.indexOf(a) - firstSeen.indexOf(b);
+      })
+      .map(([key, val]) => ({
+        key,
+        label: isAr ? val.ar : val.en,
+      }));
+  }, [products, categoryList, isAr]);
 
   const filteredProducts = useMemo(() => {
     const q = search.trim().toLowerCase();

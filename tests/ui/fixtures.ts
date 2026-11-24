@@ -3,6 +3,7 @@ import { afterEach, vi } from 'vitest';
 import { ALL_PERMISSION_KEYS } from '../../src/permissions.ts';
 import type {
   AuthUser,
+  Category,
   Customer,
   Invoice,
   OrganizationSettings,
@@ -51,6 +52,7 @@ export const PRODUCT: Product = {
   sku: 'DISH-001',
   name_ar: 'دجاج مشوي',
   name_en: 'Grilled Chicken',
+  category_id: 1,
   category_ar: 'أطباق',
   category_en: 'Dishes',
   unit_ar: 'طبق',
@@ -65,6 +67,24 @@ export const PRODUCT: Product = {
   active: 1,
   created_at: '2026-11-01T08:00:00.000Z',
   updated_at: '2026-11-01T08:00:00.000Z',
+};
+
+export const CATEGORIES: Category[] = [
+  { id: 1, name_ar: 'أطباق', name_en: 'Dishes', sort_order: 2, product_count: 1, created_at: '2026-11-01T08:00:00.000Z', updated_at: '2026-11-01T08:00:00.000Z' },
+  { id: 2, name_ar: 'مشروبات', name_en: 'Drinks', sort_order: 1, product_count: 1, created_at: '2026-11-01T08:00:00.000Z', updated_at: '2026-11-01T08:00:00.000Z' },
+];
+
+/** A second product in another category, for the POS tab order. */
+export const DRINK: Product = {
+  ...PRODUCT,
+  id: 12,
+  sku: 'DRINK-001',
+  name_ar: 'عصير',
+  name_en: 'Fresh Juice',
+  category_id: 2,
+  category_ar: 'مشروبات',
+  category_en: 'Drinks',
+  sell_price: 8,
 };
 
 export const CUSTOMER: Customer = {

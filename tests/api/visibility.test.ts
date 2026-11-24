@@ -10,17 +10,18 @@ import {
   type TestApp,
 } from '../helpers/app.ts';
 
-const ALL_LISTS = ['customers', 'heldCarts', 'invoices', 'movements', 'products', 'purchases', 'suppliers', 'vouchers'];
+// categories (R1.11c) go to everyone who sees products.
+const ALL_LISTS = ['categories', 'customers', 'heldCarts', 'invoices', 'movements', 'products', 'purchases', 'suppliers', 'vouchers'];
 
 // What each default role must receive from /api/bootstrap (R1.3, DATA_VISIBILITY).
 const EXPECTED: Record<string, { keys: string[]; cost: boolean }> = {
   admin: { keys: ['settings', ...ALL_LISTS, 'roles', 'users'], cost: true },
   manager: { keys: ['settings', ...ALL_LISTS], cost: true },
   accountant: {
-    keys: ['settings', 'customers', 'invoices', 'movements', 'products', 'purchases', 'suppliers', 'vouchers'],
+    keys: ['settings', 'categories', 'customers', 'invoices', 'movements', 'products', 'purchases', 'suppliers', 'vouchers'],
     cost: true,
   },
-  cashier: { keys: ['settings', 'customers', 'heldCarts', 'invoices', 'movements', 'products'], cost: false },
+  cashier: { keys: ['settings', 'categories', 'customers', 'heldCarts', 'invoices', 'movements', 'products'], cost: false },
 };
 
 const SECRET_MARKERS = ['PRIVATE KEY', '"private_key_pem"', '"ccsid_secret"', '"pcsid_secret"'];
@@ -66,7 +67,7 @@ describe('read scoping by role (R1.3)', () => {
 
   it('gives a POS-only role just settings, products (without cost) and customers', async () => {
     const body = await getBootstrap(t.app, posOnlyToken);
-    expect(Object.keys(body).sort()).toEqual(['customers', 'products', 'settings']);
+    expect(Object.keys(body).sort()).toEqual(['categories', 'customers', 'products', 'settings']);
     expect(body.products[0]).not.toHaveProperty('cost_price');
   });
 

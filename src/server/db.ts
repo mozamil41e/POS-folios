@@ -4,6 +4,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import type {
   AuthUser,
+  Category,
   Customer,
   HeldCart,
   Invoice,
@@ -328,6 +329,18 @@ export function initDatabase(): void {
       PRIMARY KEY (doc_type, period_year)
     );
 
+    -- Product categories (R1.11c). name_key = normalised Arabic name, so the
+    -- same category cannot be created twice with different spacing or case.
+    CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      name_key TEXT NOT NULL UNIQUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     -- Failed logins per email for the temporary lockout (R1.9): see src/server/login-guard.ts
     CREATE TABLE IF NOT EXISTS login_attempts (
       email TEXT PRIMARY KEY,
@@ -392,6 +405,15 @@ export function initDatabase(): void {
   // R1.4: drop the ZATCA columns from databases created by earlier versions.
   removeZatcaSchema();
 
+  // R1.11c: products point to a category row. Additive and non-destructive:
+  // the category_ar/category_en text columns stay as the display copy until
+  // the MariaDB schema (R3), and existing products are linked by name.
+  if (!columnsOf('products').has('category_id')) {
+    db.exec('ALTER TABLE products ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id)');
+  linkProductCategories();
+
   // Never reissue a number that already exists in this database.
   syncDocumentSequences(db);
 
@@ -419,6 +441,65 @@ export function getOrganizationSettings(): OrganizationSettings {
   return db
     .prepare('SELECT * FROM organization_settings WHERE id = 1')
     .get() as OrganizationSettings;
+}
+
+/** Normalised name used for uniqueness: trimmed, single spaces, lower case. */
+export function categoryKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export function getAllCategories(): Category[] {
+  return db
+    .prepare(`
+      SELECT c.id, c.name_ar, c.name_en, c.sort_order, c.created_at, c.updated_at,
+             (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.active = 1) AS product_count
+      FROM categories c
+      ORDER BY c.sort_order ASC, c.id ASC
+    `)
+    .all() as Category[];
+}
+
+export function getCategoryById(id: number): Category | undefined {
+  return getAllCategories().find((c) => c.id === id);
+}
+
+/** Returns the category with this Arabic name, creating it (last in order) if needed. */
+export function findOrCreateCategory(nameAr: string, nameEn = ''): Category {
+  const cleanAr = nameAr.trim().replace(/\s+/g, ' ');
+  const key = categoryKey(cleanAr);
+  const existing = db.prepare('SELECT id FROM categories WHERE name_key = ?').get(key) as { id: number } | undefined;
+  if (existing) return getCategoryById(existing.id)!;
+  const now = new Date().toISOString();
+  const next = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM categories').get() as { n: number };
+  const info = db
+    .prepare(`
+      INSERT INTO categories (name_ar, name_en, name_key, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .run(cleanAr, nameEn.trim() || cleanAr, key, next.n, now, now);
+  return getCategoryById(Number(info.lastInsertRowid))!;
+}
+
+/**
+ * Links active products that have no category_id yet to a category with the
+ * same name (created if needed). Inactive products are skipped on purpose: a
+ * deleted category must not come back because a hidden product still carries
+ * its name.
+ */
+export function linkProductCategories(): number {
+  const rows = db
+    .prepare(`
+      SELECT id, category_ar, category_en FROM products
+      WHERE category_id IS NULL AND active = 1 AND TRIM(category_ar) != ''
+      ORDER BY id
+    `)
+    .all() as Array<{ id: number; category_ar: string; category_en: string }>;
+  if (rows.length === 0) return 0;
+  const link = db.prepare('UPDATE products SET category_id = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const row of rows) link.run(findOrCreateCategory(row.category_ar, row.category_en).id, row.id);
+  })();
+  return rows.length;
 }
 
 export function getAllProducts(): Product[] {

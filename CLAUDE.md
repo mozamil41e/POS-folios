@@ -106,6 +106,7 @@ Do not assume that the target structure exists yet.
 - SQLite would be wiped on every Hostinger deploy
 - a failed checkout clears the cart (fixed in R1.6 on branch `r1/ui-safety`): every `App.tsx` mutation goes through `callApi` and returns `boolean` (or the new id, 0 on failure); screens clear carts, forms and modals only after success
 - UI buttons follow permissions (R1.6): screens receive `currentUser` and use `hasPermission` with the same key as the route. This only avoids dead ends; the server's `requirePermission` is the real check
+- Product categories (R1.11c) live in the `categories` table; `products.category_id` points to it and `category_ar`/`category_en` are a display copy kept in sync on rename (drop them in the MariaDB schema, R3). A category with active products cannot be deleted. Never write category text without going through `resolveProductCategory` / `findOrCreateCategory`.
 
 ---
 

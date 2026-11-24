@@ -3,6 +3,7 @@ import { Globe, LogOut, Moon, Sun, User } from 'lucide-react';
 import type {
   AuthUser,
   BootstrapPayload,
+  Category,
   Invoice,
   InvoiceSubtype,
   Language,
@@ -430,21 +431,31 @@ function PosWorkspace({
     return true;
   };
 
-  const handleCreateProduct = async (payload: Record<string, unknown>): Promise<boolean> => {
-    const body = await callApi<{
-      products?: BootstrapPayload['products'];
-      movements?: BootstrapPayload['movements'];
-    }>('/api/products', jsonRequest('POST', payload), 'Failed to add product');
-    if (!body) return false;
+  /** Product and category responses may carry either list; merge what came back. */
+  const mergeCatalog = (body: {
+    products?: BootstrapPayload['products'];
+    categories?: BootstrapPayload['categories'];
+    movements?: BootstrapPayload['movements'];
+  }) =>
     setData((prev) =>
       prev
         ? {
             ...prev,
             products: body.products ?? prev.products,
+            categories: body.categories ?? prev.categories,
             movements: body.movements ?? prev.movements,
           }
         : prev
     );
+
+  const handleCreateProduct = async (payload: Record<string, unknown>): Promise<boolean> => {
+    const body = await callApi<{
+      products?: BootstrapPayload['products'];
+      categories?: BootstrapPayload['categories'];
+      movements?: BootstrapPayload['movements'];
+    }>('/api/products', jsonRequest('POST', payload), 'Failed to add product');
+    if (!body) return false;
+    mergeCatalog(body);
     notify(isAr ? 'تمت إضافة الصنف بنجاح' : 'Product added');
     return true;
   };
@@ -453,16 +464,62 @@ function PosWorkspace({
     id: number,
     payload: Record<string, unknown>
   ): Promise<boolean> => {
-    const body = await callApi<{ products?: BootstrapPayload['products'] }>(
-      `/api/products/${id}`,
-      jsonRequest('PUT', payload),
-      'Failed to update product'
+    const body = await callApi<{
+      products?: BootstrapPayload['products'];
+      categories?: BootstrapPayload['categories'];
+    }>(`/api/products/${id}`, jsonRequest('PUT', payload), 'Failed to update product');
+    if (!body) return false;
+    mergeCatalog(body);
+    notify(isAr ? 'تم تحديث بيانات الصنف' : 'Product updated');
+    return true;
+  };
+
+  // Product categories (R1.11c).
+  const handleCreateCategory = async (payload: { name_ar: string; name_en: string }): Promise<number> => {
+    const body = await callApi<{
+      category?: Category;
+      categories?: BootstrapPayload['categories'];
+    }>('/api/categories', jsonRequest('POST', payload), 'Failed to add category');
+    if (!body) return 0;
+    mergeCatalog(body);
+    notify(isAr ? 'تمت إضافة التصنيف' : 'Category added');
+    return body.category?.id ?? 0;
+  };
+
+  const handleUpdateCategory = async (
+    id: number,
+    payload: { name_ar: string; name_en: string }
+  ): Promise<boolean> => {
+    const body = await callApi<{
+      categories?: BootstrapPayload['categories'];
+      products?: BootstrapPayload['products'];
+    }>(`/api/categories/${id}`, jsonRequest('PUT', payload), 'Failed to update category');
+    if (!body) return false;
+    mergeCatalog(body);
+    notify(isAr ? 'تم تحديث التصنيف وأصنافه' : 'Category and its products updated');
+    return true;
+  };
+
+  const handleDeleteCategory = async (id: number): Promise<boolean> => {
+    const body = await callApi<{ categories?: BootstrapPayload['categories'] }>(
+      `/api/categories/${id}`,
+      { method: 'DELETE' },
+      'Failed to delete category'
     );
     if (!body) return false;
-    if (body.products) {
-      setData((prev) => (prev ? { ...prev, products: body.products! } : prev));
-    }
-    notify(isAr ? 'تم تحديث بيانات الصنف' : 'Product updated');
+    mergeCatalog(body);
+    notify(isAr ? 'تم حذف التصنيف' : 'Category deleted');
+    return true;
+  };
+
+  const handleReorderCategories = async (ids: number[]): Promise<boolean> => {
+    const body = await callApi<{ categories?: BootstrapPayload['categories'] }>(
+      '/api/categories/order',
+      jsonRequest('POST', { ids }),
+      'Failed to reorder categories'
+    );
+    if (!body) return false;
+    mergeCatalog(body);
     return true;
   };
 
@@ -961,6 +1018,7 @@ function PosWorkspace({
                 lang={lang}
                 currentUser={authUser}
                 products={data.products ?? []}
+                categories={data.categories ?? []}
                 customers={data.customers ?? []}
                 heldCarts={data.heldCarts ?? []}
                 isFullscreen={isSellOnlyFullscreen}
@@ -999,12 +1057,17 @@ function PosWorkspace({
                 lang={lang}
                 currentUser={authUser}
                 products={data.products ?? []}
+                categories={data.categories ?? []}
                 movements={data.movements ?? []}
                 pageSize={data.settings.table_page_size || 10}
                 canViewCost={canViewCost(authUser)}
                 onCreateProduct={handleCreateProduct}
                 onUpdateProduct={handleUpdateProduct}
                 onStockMovement={handleStockMovement}
+                onCreateCategory={handleCreateCategory}
+                onUpdateCategory={handleUpdateCategory}
+                onDeleteCategory={handleDeleteCategory}
+                onReorderCategories={handleReorderCategories}
               />
             )}
 

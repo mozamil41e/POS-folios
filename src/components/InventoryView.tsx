@@ -1,15 +1,20 @@
 import { useMemo, useState } from 'react';
 import { ArrowDownUp, Edit3, PackagePlus, Search, X } from 'lucide-react';
-import type { AuthUser, Language, Product, StockMovement } from '../types';
+import type { AuthUser, Category, Language, Product, StockMovement } from '../types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
 import { hasPermission } from '../permissions';
+import { CategoriesPanel, type CategoryHandlers } from './CategoriesPanel';
 import { TablePagination, useTablePagination } from './TablePagination';
 
-interface InventoryViewProps {
+const NO_CATEGORIES: Category[] = [];
+
+interface InventoryViewProps extends CategoryHandlers {
   lang: Language;
   /** Add/edit and restock buttons follow this user's permissions. */
   currentUser: AuthUser;
   products: Product[];
+  /** Product categories, in POS tab order (R1.11c). */
+  categories?: Category[];
   movements: StockMovement[];
   pageSize?: number;
   /** False for users without cost permission: cost column and stock value are hidden (D11). */
@@ -28,12 +33,14 @@ export function InventoryView({
   lang,
   currentUser,
   products,
+  categories = NO_CATEGORIES,
   movements,
   pageSize = 10,
   canViewCost,
   onCreateProduct,
   onUpdateProduct,
   onStockMovement,
+  ...categoryHandlers
 }: InventoryViewProps) {
   const t = translations[lang];
   const isAr = lang === 'ar';
@@ -42,7 +49,9 @@ export function InventoryView({
   const canAdjustStock = hasPermission(currentUser, 'inventory.adjust');
   const showRowActions = canManageProducts || canAdjustStock;
 
-  const [tab, setTab] = useState<'catalog' | 'movements'>('catalog');
+  const [tab, setTab] = useState<'catalog' | 'movements' | 'categories'>('catalog');
+  const [quickCategory, setQuickCategory] = useState('');
+  const [addingCategory, setAddingCategory] = useState(false);
   const [search, setSearch] = useState('');
   const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out'>('all');
 
@@ -59,8 +68,7 @@ export function InventoryView({
     sku: '',
     name_ar: '',
     name_en: '',
-    category_ar: 'المواد الغذائية',
-    category_en: 'Groceries',
+    category_id: '',
     unit_ar: 'حبة',
     unit_en: 'Pcs',
     cost_price: '10',
@@ -115,8 +123,7 @@ export function InventoryView({
       sku: `6281007${String(Math.floor(100000 + Math.random() * 899999))}`,
       name_ar: '',
       name_en: '',
-      category_ar: 'المواد الغذائية',
-      category_en: 'Groceries',
+      category_id: String(categories[0]?.id ?? ''),
       unit_ar: 'عبوة',
       unit_en: 'Pack',
       cost_price: '10.00',
@@ -135,8 +142,7 @@ export function InventoryView({
       sku: p.sku,
       name_ar: p.name_ar,
       name_en: p.name_en,
-      category_ar: p.category_ar,
-      category_en: p.category_en,
+      category_id: String(p.category_id ?? ''),
       unit_ar: p.unit_ar,
       unit_en: p.unit_en,
       cost_price: String(p.cost_price ?? ''),
@@ -153,6 +159,8 @@ export function InventoryView({
     e.preventDefault();
     const payload = {
       ...formState,
+      // Chosen from the list (R1.11c); empty keeps the current category.
+      category_id: Number(formState.category_id) || undefined,
       cost_price: Number(formState.cost_price),
       sell_price: Number(formState.sell_price),
       tax_rate: Number(formState.tax_rate),
@@ -172,6 +180,22 @@ export function InventoryView({
       if (ok) setShowProductForm(false);
     } finally {
       setSavingProduct(false);
+    }
+  };
+
+  /** Adds a category from inside the product form and selects it. */
+  const handleQuickAddCategory = async () => {
+    const name = quickCategory.trim();
+    if (!name || addingCategory || !categoryHandlers.onCreateCategory) return;
+    setAddingCategory(true);
+    try {
+      const id = await categoryHandlers.onCreateCategory({ name_ar: name, name_en: '' });
+      if (id) {
+        setFormState((prev) => ({ ...prev, category_id: String(id) }));
+        setQuickCategory('');
+      }
+    } finally {
+      setAddingCategory(false);
     }
   };
 
@@ -275,6 +299,17 @@ export function InventoryView({
           >
             {t.movementsTab}
           </button>
+          <button
+            type="button"
+            onClick={() => setTab('categories')}
+            className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+              tab === 'categories'
+                ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            {isAr ? 'التصنيفات' : 'Categories'}
+          </button>
         </div>
 
         {tab === 'catalog' && (
@@ -311,7 +346,14 @@ export function InventoryView({
       </div>
 
       {/* Main Table */}
-      {tab === 'catalog' ? (
+      {tab === 'categories' ? (
+        <CategoriesPanel
+          lang={lang}
+          categories={categories}
+          canManage={canManageProducts}
+          {...categoryHandlers}
+        />
+      ) : tab === 'catalog' ? (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
           <table className="w-full text-xs text-start">
             <thead className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
@@ -531,23 +573,51 @@ export function InventoryView({
                 />
               </div>
               <div>
-                <label className="block text-slate-500 mb-1">
+                <label htmlFor="product-category" className="block text-slate-500 mb-1">
                   {isAr ? 'التصنيف' : 'Category'}
                 </label>
-                <input
+                {/* A list instead of free text (R1.11c): no misspelled duplicates. */}
+                <select
+                  id="product-category"
                   required
-                  type="text"
-                  maxLength={60}
-                  value={formState.category_ar}
-                  onChange={(e) =>
-                    setFormState({
-                      ...formState,
-                      category_ar: e.target.value,
-                      category_en: e.target.value,
-                    })
-                  }
+                  value={formState.category_id}
+                  onChange={(e) => setFormState({ ...formState, category_id: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
-                />
+                >
+                  <option value="">{isAr ? '— اختر التصنيف —' : '— Choose a category —'}</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {isAr ? c.name_ar : c.name_en}
+                    </option>
+                  ))}
+                </select>
+                {categoryHandlers.onCreateCategory && (
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <input
+                      type="text"
+                      maxLength={60}
+                      value={quickCategory}
+                      onChange={(e) => setQuickCategory(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleQuickAddCategory();
+                        }
+                      }}
+                      placeholder={isAr ? 'أو أضف تصنيفاً جديداً…' : 'or add a new category…'}
+                      aria-label={isAr ? 'اسم تصنيف جديد' : 'New category name'}
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                    />
+                    <button
+                      type="button"
+                      disabled={addingCategory || !quickCategory.trim()}
+                      onClick={() => void handleQuickAddCategory()}
+                      className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 font-semibold disabled:opacity-40 whitespace-nowrap"
+                    >
+                      {isAr ? 'إضافة' : 'Add'}
+                    </button>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-slate-500 mb-1">

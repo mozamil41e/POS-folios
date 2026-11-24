@@ -199,6 +199,18 @@ export const DATA_VISIBILITY = {
     'purchases.manage',
     'reports.view',
   ],
+  // Category names are shown wherever products are (POS tabs, inventory).
+  categories: [
+    'pos.access',
+    'sales.view',
+    'sales.return',
+    'inventory.view',
+    'inventory.manage',
+    'inventory.adjust',
+    'purchases.view',
+    'purchases.manage',
+    'reports.view',
+  ],
   customers: ['pos.access', 'sales.view', 'sales.return', 'customers.manage', 'reports.view'],
   invoices: ['sales.view', 'sales.return', 'reports.view'],
   movements: ['inventory.view', 'inventory.manage', 'inventory.adjust', 'reports.view'],

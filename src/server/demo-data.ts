@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { InvoiceItem } from '../types.ts';
-import { db, getAllCustomers, getAllProducts } from './db.ts';
+import { db, getAllCustomers, getAllProducts, linkProductCategories } from './db.ts';
 import { nextDocumentNumber } from './sequences.ts';
 
 /**
@@ -13,6 +13,7 @@ import { nextDocumentNumber } from './sequences.ts';
 
 /** Tables that hold the restaurant's own records. Roles, settings and users are not demo data. */
 const BUSINESS_TABLES = [
+  'categories',
   'products',
   'stock_movements',
   'customers',
@@ -42,6 +43,8 @@ export function seedDemoData(): boolean {
   db.transaction(() => {
     seedDemoSettings();
     seedDemoProducts();
+    // Creates the demo categories from the products' category names (R1.11c).
+    linkProductCategories();
     seedDemoCustomers();
     seedInitialInvoices();
     seedInitialSuppliersAndPurchases();
