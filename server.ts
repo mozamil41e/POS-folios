@@ -37,8 +37,20 @@ import {
   type VisibleDataKey,
 } from './src/permissions.ts';
 import { scopeForUser } from './src/server/visibility.ts';
-import { isValidVatNumber } from './src/validation.ts';
+import { isValidPasswordLength, isValidVatNumber } from './src/validation.ts';
 import { nextDocumentNumber } from './src/server/sequences.ts';
+import {
+  clearLoginFailures,
+  loginLockRemainingMs,
+  recordLoginFailure,
+} from './src/server/login-guard.ts';
+import {
+  contentSecurityPolicy,
+  createRateLimiters,
+  noIndex,
+  resolveTrustProxy,
+  securityHeaders,
+} from './src/server/security.ts';
 import type {
   AuthUser,
   FontSizeLevel,
@@ -58,8 +70,21 @@ import type {
 
 initDatabase();
 
+// Production = NODE_ENV=production or running the compiled bundle (npm start).
+const currentFile = fileURLToPath(import.meta.url);
+const isCompiledEntry =
+  path.basename(currentFile) === 'server.js' ||
+  path.basename(process.argv[1] || '') === 'server.js';
+const isProduction = process.env.NODE_ENV === 'production' || isCompiledEntry;
+
 const app = express();
+// Client IPs come from Hostinger's proxy (X-Forwarded-For); see security.ts (SEC-22).
+app.set('trust proxy', resolveTrustProxy(process.env.TRUST_PROXY, isProduction));
+app.use(securityHeaders);
 app.use(express.json({ limit: '2mb' }));
+const limiters = createRateLimiters();
+
+const PASSWORD_LENGTH_ERROR = 'Password must be between 8 and 128 characters.';
 
 // Express 4 does not catch rejected promises from async handlers: an error there
 // would be an unhandled rejection and crash the whole process (R1.5, SEC-08).
@@ -79,8 +104,9 @@ function knownErrorCode(err: unknown, known: ReadonlySet<string>): string | null
   return known.has(code) ? code : null;
 }
 
-// Public read-only invoice lookup (used by thermal receipt QR public URL)
-app.get('/api/public/invoices/:uuid', (req: Request, res: Response) => {
+// Public read-only invoice lookup (used by thermal receipt QR public URL).
+// Rate limited and not indexed (R1.9); the payload is an allowlist (db.ts).
+app.get('/api/public/invoices/:uuid', noIndex, limiters.publicInvoice, (req: Request, res: Response) => {
   const uuid = String(req.params.uuid ?? '').trim();
   if (!uuid || uuid.length > 80) {
     res.status(400).json({ error: 'Invalid invoice identifier.' });
@@ -120,7 +146,7 @@ const REGISTRATION_CLOSED_RESPONSE = {
 
 // First-run setup only (SEC-01): creates the first administrator while the
 // users table is empty. Afterwards accounts are created by an admin via /api/users.
-app.post('/api/auth/register', (req: Request, res: Response) => {
+app.post('/api/auth/register', limiters.setup, asyncHandler(async (req: Request, res: Response) => {
   if (hasAnyUsers()) {
     res.status(403).json(REGISTRATION_CLOSED_RESPONSE);
     return;
@@ -144,10 +170,13 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Valid email address is required.' });
     return;
   }
-  if (password.length < 6 || password.length > 128) {
-    res.status(400).json({ error: 'Password must be between 6 and 128 characters.' });
+  if (!isValidPasswordLength(password)) {
+    res.status(400).json({ error: PASSWORD_LENGTH_ERROR, code: 'PASSWORD_TOO_SHORT' });
     return;
   }
+
+  // Hashed before the transaction: better-sqlite3 transactions cannot await.
+  const passwordHash = await hashPassword(password);
 
   try {
     const registerTx = db.transaction(() => {
@@ -161,7 +190,6 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       const targetSlug = 'admin';
       const targetRole = getRoleBySlug(targetSlug);
       const now = new Date().toISOString();
-      const passwordHash = hashPassword(password);
 
       const info = db
         .prepare(`
@@ -196,15 +224,37 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     }
     res.status(400).json({ error: 'Failed to create account.' });
   }
-});
+}));
 
-app.post('/api/auth/login', (req: Request, res: Response) => {
+function sendLoginLocked(res: Response, retryAfterMs: number): void {
+  const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  res.setHeader('Retry-After', String(retryAfterSeconds));
+  res.status(429).json({
+    error: 'Too many failed sign-in attempts. Sign-in is paused for this account.',
+    code: 'LOGIN_LOCKED',
+    retryAfterSeconds,
+  });
+}
+
+// Compared against when the email is unknown, so both cases take the same
+// time and the response does not reveal which emails have accounts.
+let timingDummyHash: Promise<string> | null = null;
+const dummyPasswordHash = () => (timingDummyHash ??= hashPassword(crypto.randomUUID()));
+
+app.post('/api/auth/login', limiters.login, asyncHandler(async (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const email = String(b.email ?? '').trim().toLowerCase();
   const password = typeof b.password === 'string' ? b.password : '';
 
   if (!email || !password) {
     res.status(400).json({ error: 'Email and password are required.' });
+    return;
+  }
+
+  // R1.9 (SEC-05): while locked, even the right password is refused.
+  const lockedForMs = loginLockRemainingMs(db, email);
+  if (lockedForMs > 0) {
+    sendLoginLocked(res, lockedForMs);
     return;
   }
 
@@ -218,10 +268,22 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       }
     | undefined;
 
-  if (!user || !verifyPassword(password, user.password_hash)) {
-    res.status(401).json({ error: 'Invalid email or password.' });
+  const passwordOk = await verifyPassword(password, user?.password_hash ?? (await dummyPasswordHash()));
+  if (!user || !passwordOk) {
+    const failure = recordLoginFailure(db, email);
+    if (failure.locked) {
+      sendLoginLocked(res, failure.retryAfterMs);
+      return;
+    }
+    res.status(401).json({
+      error: 'Invalid email or password.',
+      code: 'INVALID_CREDENTIALS',
+      attemptsLeft: failure.attemptsLeft,
+    });
     return;
   }
+
+  clearLoginFailures(db, email);
 
   if (user.is_active === 0) {
     res.status(403).json({
@@ -240,7 +302,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     token: session.token,
     user: authUser,
   });
-});
+}));
 
 // Require valid Bearer session token for all private /api routes
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
@@ -315,7 +377,7 @@ app.get('/api/users', requirePermission('users.manage'), (_req: Request, res: Re
   });
 });
 
-app.post('/api/users', requirePermission('users.manage'), (req: Request, res: Response) => {
+app.post('/api/users', requirePermission('users.manage'), asyncHandler(async (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const fullName = String(b.full_name ?? '').trim();
   const email = String(b.email ?? '').trim().toLowerCase();
@@ -332,8 +394,8 @@ app.post('/api/users', requirePermission('users.manage'), (req: Request, res: Re
     res.status(400).json({ error: 'Valid email address is required.' });
     return;
   }
-  if (password.length < 6 || password.length > 128) {
-    res.status(400).json({ error: 'Password must be between 6 and 128 characters.' });
+  if (!isValidPasswordLength(password)) {
+    res.status(400).json({ error: PASSWORD_LENGTH_ERROR, code: 'PASSWORD_TOO_SHORT' });
     return;
   }
 
@@ -350,7 +412,14 @@ app.post('/api/users', requirePermission('users.manage'), (req: Request, res: Re
   }
 
   const now = new Date().toISOString();
-  const passwordHash = hashPassword(password);
+  const passwordHash = await hashPassword(password);
+  // Re-checked after the await: another request may have used the email meanwhile.
+  if (db.prepare('SELECT id FROM users WHERE email = ?').get(email)) {
+    res.status(409).json({ error: 'An account with this email already exists.' });
+    return;
+  }
+  // Failures recorded before the account existed must not carry over.
+  clearLoginFailures(db, email);
   const info = db
     .prepare(`
       INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, created_at)
@@ -363,9 +432,9 @@ app.post('/api/users', requirePermission('users.manage'), (req: Request, res: Re
     users: getAllUsers(),
     roles: getAllRoles(),
   });
-});
+}));
 
-app.put('/api/users/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+app.put('/api/users/:id', requirePermission('users.manage'), asyncHandler(async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const authUser = res.locals.authUser as AuthUser;
   const existing = db
@@ -396,8 +465,8 @@ app.put('/api/users/:id', requirePermission('users.manage'), (req: Request, res:
     res.status(400).json({ error: 'Valid email address is required.' });
     return;
   }
-  if (password && (password.length < 6 || password.length > 128)) {
-    res.status(400).json({ error: 'Password must be between 6 and 128 characters.' });
+  if (password && !isValidPasswordLength(password)) {
+    res.status(400).json({ error: PASSWORD_LENGTH_ERROR, code: 'PASSWORD_TOO_SHORT' });
     return;
   }
 
@@ -453,18 +522,22 @@ app.put('/api/users/:id', requirePermission('users.manage'), (req: Request, res:
     }
   }
 
-  db.prepare(`
-    UPDATE users
-    SET full_name = ?, email = ?, phone = ?, role = ?, role_id = ?, is_active = ?
-    WHERE id = ?
-  `).run(fullName, email, phone, targetRole.slug, targetRole.id, nextActive, id);
+  // Hashed before any write, so a failure cannot leave a half-updated user.
+  const newPasswordHash = password ? await hashPassword(password) : null;
 
-  if (password) {
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-      hashPassword(password),
-      id
-    );
-  }
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE users
+      SET full_name = ?, email = ?, phone = ?, role = ?, role_id = ?, is_active = ?
+      WHERE id = ?
+    `).run(fullName, email, phone, targetRole.slug, targetRole.id, nextActive, id);
+
+    if (newPasswordHash) {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newPasswordHash, id);
+      // An administrator setting a new password also lifts a lockout (R1.9).
+      clearLoginFailures(db, existing.email, email);
+    }
+  })();
 
   if (nextActive === 0 || password) {
     revokeAllSessionsForUser(id);
@@ -475,7 +548,7 @@ app.put('/api/users/:id', requirePermission('users.manage'), (req: Request, res:
     roles: getAllRoles(),
     currentUser: id === authUser.id ? resolveAuthUserById(authUser.id) : undefined,
   });
-});
+}));
 
 app.delete('/api/users/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
@@ -1725,12 +1798,7 @@ async function startServer(): Promise<void> {
   });
 
   const port = Number(process.env.PORT) || 3000;
-  const currentFile = fileURLToPath(import.meta.url);
   const currentDir = path.dirname(currentFile);
-  const isCompiledEntry =
-    path.basename(currentFile) === 'server.js' ||
-    path.basename(process.argv[1] || '') === 'server.js';
-  const isProduction = process.env.NODE_ENV === 'production' || isCompiledEntry;
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
@@ -1748,6 +1816,9 @@ async function startServer(): Promise<void> {
       distCandidates.find((dir) => fs.existsSync(path.join(dir, 'index.html'))) ??
       distCandidates[0];
 
+    // R1.9 (SEC-11): CSP for the built UI only; Vite's dev server needs inline scripts.
+    app.use(contentSecurityPolicy);
+    app.use('/i', noIndex); // public invoice pages opened from the receipt QR
     app.use(express.static(distDir));
     app.use('/api', (_req: Request, res: Response) => {
       res.status(404).json({ error: 'API route not found.' });

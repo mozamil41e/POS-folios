@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createTestApp, getBootstrap, registerFirstAdmin, type TestApp } from '../helpers/app.ts';
 
-describe('GET /api/public/invoices/:uuid (characterization)', () => {
+describe('GET /api/public/invoices/:uuid', () => {
   let t: TestApp;
   let uuid: string;
 
@@ -30,9 +30,20 @@ describe('GET /api/public/invoices/:uuid (characterization)', () => {
     expect(store).not.toHaveProperty('private_key_pem');
     expect(store).not.toHaveProperty('pcsid_secret');
 
-    // CURRENT BEHAVIOUR (SEC-14): the buyer VAT number is sent although the
-    // page never shows it. R1.9 removes it — flip this expectation then.
-    expect(invoice).toHaveProperty('customer_vat');
+    // SEC-14 fixed in R1.9: the page never shows the buyer VAT number, so it is not sent.
+    expect(invoice).not.toHaveProperty('customer_vat');
+    // Lines carry no internal ids either.
+    for (const item of invoice.items) {
+      expect(Object.keys(item).sort()).toEqual(
+        ['discount', 'line_subtotal', 'line_total', 'line_vat', 'name_ar', 'name_en', 'qty', 'sku',
+          'tax_category', 'tax_rate', 'unit_ar', 'unit_price'].sort()
+      );
+    }
+  });
+
+  it('asks search engines not to index it (R1.9)', async () => {
+    const res = await request(t.app).get(`/api/public/invoices/${uuid}`);
+    expect(res.headers['x-robots-tag']).toBe('noindex, nofollow');
   });
 
   it('returns 404 for an unknown uuid and 400 for an oversized identifier', async () => {

@@ -327,6 +327,14 @@ export function initDatabase(): void {
       last_value INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (doc_type, period_year)
     );
+
+    -- Failed logins per email for the temporary lockout (R1.9): see src/server/login-guard.ts
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      email TEXT PRIMARY KEY,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      window_started_at TEXT NOT NULL,
+      locked_until TEXT
+    );
   `);
 
   const orgCols = db
@@ -884,6 +892,27 @@ export function getAllVouchers(): Voucher[] {
     .all() as Voucher[];
 }
 
+/** Invoice line as shown on the public page: no internal ids (R1.9). */
+export type PublicInvoiceItem = Pick<
+  InvoiceItem,
+  | 'sku'
+  | 'name_ar'
+  | 'name_en'
+  | 'unit_ar'
+  | 'qty'
+  | 'unit_price'
+  | 'discount'
+  | 'tax_rate'
+  | 'tax_category'
+  | 'line_subtotal'
+  | 'line_vat'
+  | 'line_total'
+>;
+
+/**
+ * Anyone holding the link (receipt QR) can open this, so it returns an
+ * allowlist only: no internal ids and no customer VAT number (R1.9, SEC-14).
+ */
 export function getPublicInvoiceByUuid(uuid: string): {
   invoice: {
     uuid: string;
@@ -894,14 +923,13 @@ export function getPublicInvoiceByUuid(uuid: string): {
     cash_amount: number;
     card_amount: number;
     customer_name: string;
-    customer_vat: string;
     subtotal: number;
     discount_total: number;
     vat_total: number;
     grand_total: number;
     related_invoice_number: string | null;
     created_at: string;
-    items: InvoiceItem[];
+    items: PublicInvoiceItem[];
   };
   store: {
     name_ar: string;
@@ -918,7 +946,7 @@ export function getPublicInvoiceByUuid(uuid: string): {
   const inv = db
     .prepare(`
       SELECT id, uuid, invoice_number, invoice_type_code, invoice_subtype,
-             payment_method, cash_amount, card_amount, customer_name, customer_vat,
+             payment_method, cash_amount, card_amount, customer_name,
              subtotal, discount_total, vat_total, grand_total, related_invoice_number, created_at
       FROM invoices
       WHERE uuid = ?
@@ -934,7 +962,6 @@ export function getPublicInvoiceByUuid(uuid: string): {
         cash_amount: number;
         card_amount: number;
         customer_name: string;
-        customer_vat: string;
         subtotal: number;
         discount_total: number;
         vat_total: number;
@@ -947,8 +974,14 @@ export function getPublicInvoiceByUuid(uuid: string): {
   if (!inv) return null;
 
   const items = db
-    .prepare('SELECT * FROM invoice_items WHERE invoice_id = ?')
-    .all(inv.id) as InvoiceItem[];
+    .prepare(`
+      SELECT sku, name_ar, name_en, unit_ar, qty, unit_price, discount, tax_rate, tax_category,
+             line_subtotal, line_vat, line_total
+      FROM invoice_items
+      WHERE invoice_id = ?
+      ORDER BY id
+    `)
+    .all(inv.id) as PublicInvoiceItem[];
   const org = getOrganizationSettings();
 
   const { id: _internalId, ...publicInvoice } = inv;
@@ -971,19 +1004,28 @@ export function getPublicInvoiceByUuid(uuid: string): {
   };
 }
 
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${derived}`;
+// The async scrypt runs on libuv's thread pool, so logins no longer block every
+// other request (R1.9, SEC-07). Same parameters as before (Node defaults,
+// 64-byte key), so hashes stored by the old scryptSync code still verify.
+function scryptAsync(password: string, salt: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, 64, (err, derived) => (err ? reject(err) : resolve(derived)));
+  });
 }
 
-export function verifyPassword(password: string, storedHash: string): boolean {
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = await scryptAsync(password, salt);
+  return `${salt}:${derived.toString('hex')}`;
+}
+
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   const parts = storedHash.split(':');
   if (parts.length !== 2) return false;
   const [salt, hexHash] = parts;
   if (!salt || !hexHash) return false;
   try {
-    const derived = crypto.scryptSync(password, salt, 64);
+    const derived = await scryptAsync(password, salt);
     const expected = Buffer.from(hexHash, 'hex');
     if (derived.length !== expected.length) return false;
     return crypto.timingSafeEqual(derived, expected);

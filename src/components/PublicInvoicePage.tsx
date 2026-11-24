@@ -14,7 +14,6 @@ interface PublicInvoiceResponse {
     cash_amount: number;
     card_amount: number;
     customer_name: string;
-    customer_vat: string;
     subtotal: number;
     discount_total: number;
     vat_total: number;

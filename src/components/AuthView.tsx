@@ -2,6 +2,20 @@ import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Globe, KeyRound, Lock, Mail, Moon, Sun, User } from 'lucide-react';
 import type { AuthUser, Language } from '../types';
 import { translations } from '../i18n';
+import { PASSWORD_MIN_LENGTH } from '../validation';
+
+/** A pause imposed by the server (R1.9): 'account' = this email, 'network' = this IP. */
+interface SignInPause {
+  until: number;
+  scope: 'account' | 'network';
+  email: string;
+}
+
+function formatCountdown(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
 
 interface AuthViewProps {
   lang: Language;
@@ -36,6 +50,26 @@ export function AuthView({
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [pause, setPause] = useState<SignInPause | null>(null);
+  const [now, setNow] = useState(0);
+
+  // Ticks the countdown once a second while a pause is active.
+  useEffect(() => {
+    if (!pause) return;
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= pause.until) setPause(null);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [pause]);
+
+  const pauseSecondsLeft = pause ? Math.max(0, Math.ceil((pause.until - now) / 1000)) : 0;
+  // An account pause only blocks that email; a network pause blocks every attempt.
+  const isPaused =
+    pause !== null &&
+    pauseSecondsLeft > 0 &&
+    (pause.scope === 'network' || pause.email === email.trim().toLowerCase());
 
   useEffect(() => {
     let active = true;
@@ -59,6 +93,7 @@ export function AuthView({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPaused) return;
     setErrorMsg(null);
 
     const cleanEmail = email.trim().toLowerCase();
@@ -69,16 +104,22 @@ export function AuthView({
       return;
     }
 
-    if (password.length < 6) {
-      setErrorMsg(
-        isAr
-          ? 'يجب أن تتكون كلمة المرور من 6 أحرف على الأقل'
-          : 'Password must be at least 6 characters.'
-      );
+    if (!password) {
+      setErrorMsg(isAr ? 'يرجى إدخال كلمة المرور' : 'Please enter your password.');
       return;
     }
 
     if (mode === 'setup') {
+      // The length rule applies to new passwords only: accounts created before
+      // R1.9 may still sign in with a shorter one.
+      if (password.length < PASSWORD_MIN_LENGTH) {
+        setErrorMsg(
+          isAr
+            ? `يجب أن تتكون كلمة المرور من ${PASSWORD_MIN_LENGTH} أحرف على الأقل`
+            : `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
+        );
+        return;
+      }
       if (setupTokenRequired && !setupToken.trim()) {
         setErrorMsg(isAr ? 'يرجى إدخال رمز الإعداد' : 'Please enter the setup token.');
         return;
@@ -118,10 +159,23 @@ export function AuthView({
         code?: string;
         token?: string;
         user?: AuthUser;
+        attemptsLeft?: number;
+        retryAfterSeconds?: number;
       };
 
       if (!res.ok || !body.token || !body.user) {
-        if (body.code === 'REGISTRATION_CLOSED') {
+        if (res.status === 429) {
+          // LOGIN_LOCKED (this email) or RATE_LIMITED (this network): show a countdown.
+          const seconds = Math.max(1, Number(body.retryAfterSeconds) || 60);
+          const current = Date.now();
+          setNow(current);
+          setPause({
+            until: current + seconds * 1000,
+            scope: body.code === 'LOGIN_LOCKED' ? 'account' : 'network',
+            email: cleanEmail,
+          });
+          setErrorMsg(null);
+        } else if (body.code === 'REGISTRATION_CLOSED') {
           // Someone completed setup in the meantime — only sign-in remains.
           setHasUsers(true);
           setMode('login');
@@ -133,10 +187,15 @@ export function AuthView({
         } else if (body.code === 'INVALID_SETUP_TOKEN') {
           setErrorMsg(isAr ? 'رمز الإعداد غير صحيح' : 'The setup token is incorrect.');
         } else if (res.status === 401) {
+          const left = typeof body.attemptsLeft === 'number' ? body.attemptsLeft : null;
           setErrorMsg(
             isAr
-              ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة'
-              : 'Invalid email or password.'
+              ? `البريد الإلكتروني أو كلمة المرور غير صحيحة${
+                  left !== null ? `. المحاولات المتبقية قبل الإيقاف المؤقت: ${left}` : ''
+                }`
+              : `Invalid email or password.${
+                  left !== null ? ` Attempts left before a temporary pause: ${left}` : ''
+                }`
           );
         } else {
           setErrorMsg(
@@ -226,9 +285,28 @@ export function AuthView({
             </div>
           )}
 
+          {/* Temporary sign-in pause (R1.9) */}
+          {isPaused && pause && (
+            <div
+              role="alert"
+              className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-xs font-medium text-amber-800 dark:text-amber-300 leading-relaxed"
+            >
+              {pause.scope === 'account'
+                ? isAr
+                  ? `تم إيقاف تسجيل الدخول لهذا الحساب مؤقتاً بسبب محاولات خاطئة متكررة. حاول بعد ${formatCountdown(pauseSecondsLeft)} دقيقة، أو اطلب من مدير النظام تعيين كلمة مرور جديدة.`
+                  : `Sign-in for this account is paused after repeated wrong passwords. Try again in ${formatCountdown(pauseSecondsLeft)}, or ask an administrator to set a new password.`
+                : isAr
+                ? `محاولات دخول فاشلة كثيرة من هذه الشبكة. حاول بعد ${formatCountdown(pauseSecondsLeft)} دقيقة.`
+                : `Too many failed sign-in attempts from this network. Try again in ${formatCountdown(pauseSecondsLeft)}.`}
+            </div>
+          )}
+
           {/* Error Alert */}
-          {errorMsg && (
-            <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs font-medium text-red-700 dark:text-red-300">
+          {errorMsg && !isPaused && (
+            <div
+              role="alert"
+              className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs font-medium text-red-700 dark:text-red-300"
+            >
               {errorMsg}
             </div>
           )}
@@ -281,12 +359,16 @@ export function AuthView({
             )}
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <label
+                htmlFor="auth-email"
+                className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+              >
                 {isAr ? 'البريد الإلكتروني' : 'Email Address'}
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3" />
                 <input
+                  id="auth-email"
                   required
                   type="email"
                   dir="ltr"
@@ -300,18 +382,22 @@ export function AuthView({
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <label
+                htmlFor="auth-password"
+                className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+              >
                 {isAr ? 'كلمة المرور' : 'Password'}
               </label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3" />
                 <input
+                  id="auth-password"
                   required
                   type={showPassword ? 'text' : 'password'}
                   dir="ltr"
-                  minLength={6}
+                  minLength={mode === 'setup' ? PASSWORD_MIN_LENGTH : undefined}
                   autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  placeholder="••••••"
+                  placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full ps-9 pe-10 py-2.5 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:border-emerald-700"
@@ -342,9 +428,9 @@ export function AuthView({
                     required
                     type={showPassword ? 'text' : 'password'}
                     dir="ltr"
-                    minLength={6}
+                    minLength={PASSWORD_MIN_LENGTH}
                     autoComplete="new-password"
-                    placeholder="••••••"
+                    placeholder="••••••••"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     className="w-full ps-9 pe-3 py-2.5 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:border-emerald-700"
@@ -355,10 +441,14 @@ export function AuthView({
 
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || isPaused}
               className="w-full py-3 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm font-semibold transition-colors"
             >
-              {submitting
+              {isPaused
+                ? isAr
+                  ? `حاول بعد ${formatCountdown(pauseSecondsLeft)}`
+                  : `Try again in ${formatCountdown(pauseSecondsLeft)}`
+                : submitting
                 ? isAr
                   ? 'جاري التحقق...'
                   : 'Please wait...'

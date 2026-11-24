@@ -15,6 +15,8 @@ import {
   initDatabase,
   revokeAllSessionsForUser,
 } from '../src/server/db.ts';
+import { clearLoginFailures } from '../src/server/login-guard.ts';
+import { isValidPasswordLength } from '../src/validation.ts';
 
 function fail(message: string): never {
   console.error(`create-admin: ${message}`);
@@ -28,11 +30,12 @@ const password = process.env.ADMIN_PASSWORD ?? '';
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
   fail('ADMIN_EMAIL must be a valid email address.');
 }
-if (password.length < 8 || password.length > 128) {
+if (!isValidPasswordLength(password)) {
   fail('ADMIN_PASSWORD must be between 8 and 128 characters.');
 }
 
 initDatabase();
+const passwordHash = await hashPassword(password);
 
 const adminRole = getRoleBySlug('admin');
 if (!adminRole) {
@@ -46,8 +49,9 @@ const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email) a
 if (existing) {
   db.prepare(
     'UPDATE users SET password_hash = ?, role = ?, role_id = ?, is_active = 1 WHERE id = ?'
-  ).run(hashPassword(password), adminRole.slug, adminRole.id, existing.id);
+  ).run(passwordHash, adminRole.slug, adminRole.id, existing.id);
   revokeAllSessionsForUser(existing.id);
+  clearLoginFailures(db, email); // also lifts a sign-in lockout (R1.9)
   console.log(
     `create-admin: restored administrator access for ${email} (user #${existing.id}); its sessions were revoked.`
   );
@@ -60,7 +64,7 @@ if (existing) {
       INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, created_at)
       VALUES (?, ?, '', ?, ?, ?, 1, ?)
     `)
-    .run(fullName, email, hashPassword(password), adminRole.slug, adminRole.id, new Date().toISOString());
+    .run(fullName, email, passwordHash, adminRole.slug, adminRole.id, new Date().toISOString());
   console.log(`create-admin: created administrator ${email} (user #${Number(info.lastInsertRowid)}).`);
 }
 

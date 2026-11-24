@@ -16,6 +16,11 @@ export interface TestAppOptions {
   dbPath?: string;
   /** Value of SETUP_TOKEN for this file. Unset by default (local-development behaviour). */
   setupToken?: string;
+  /**
+   * Value of TRUST_PROXY. Unset by default (no proxy, like local development).
+   * Set it to '1' to simulate clients behind Hostinger's proxy with X-Forwarded-For.
+   */
+  trustProxy?: string;
 }
 
 /** Creates an empty temporary directory and returns the path of a database file inside it. */
@@ -39,6 +44,11 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   } else {
     delete process.env.SETUP_TOKEN;
   }
+  if (options.trustProxy) {
+    process.env.TRUST_PROXY = options.trustProxy;
+  } else {
+    delete process.env.TRUST_PROXY;
+  }
   const server = await import('../../server.ts');
   const { db } = await import('../../src/server/db.ts');
   return {
@@ -47,6 +57,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     cleanup: () => {
       db.close();
       delete process.env.SETUP_TOKEN;
+      delete process.env.TRUST_PROXY;
       fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
     },
   };

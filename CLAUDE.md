@@ -137,9 +137,10 @@ These facts come from Hostinger's support pages. Design around them:
 - GitHub auto-deploy from **`main`** (confirmed from the build log on 2026-11-24): **every push to `main` is a production deploy**.
   - Hostinger runs Node 22, `npm install` (npm 10, devDependencies included), then `npm run build`. Entry file: `server.js`. Application type: Express.
   - If `npm install` fails, Hostinger retries with `--legacy-peer-deps`.
-  - Env vars are managed in hPanel (`SETUP_TOKEN` is set). There is no `.env` file.
+  - Env vars are managed in hPanel (`SETUP_TOKEN` is set). There is no `.env` file. Optional: `TRUST_PROXY` (R1.9; unset = one proxy hop in production).
 - Resources: 2 CPU, 3 GB RAM, NPROC 120. A single Node process serves both the SPA and the API (same origin).
-- Still to verify during R8.1: whether SSH is available, the localhost MariaDB connection, whether `mysqldump` works in cron, and proxy/`trust proxy` behaviour.
+- Rate limits (R1.9, `src/server/security.ts`) live in process memory, which works because there is one process. The per-email sign-in lockout is in the DB (`login_attempts`, `src/server/login-guard.ts`).
+- Still to verify during R8.1: whether SSH is available, the localhost MariaDB connection, whether `mysqldump` works in cron, and that `TRUST_PROXY=1` matches Hostinger's proxy (two networks must be rate-limited separately).
 
 ---
 
