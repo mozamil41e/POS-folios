@@ -48,7 +48,7 @@ interface InvoicesSettingsViewProps {
     notes: string;
     voucher_date: string;
   }) => Promise<void>;
-  onDeleteVoucher: (id: number) => Promise<void>;
+  onVoidVoucher: (id: number, reason: string) => Promise<void>;
   onStockMovement: (payload: {
     product_id: number;
     type: 'purchase' | 'adjustment' | 'return';
@@ -114,7 +114,7 @@ export function InvoicesSettingsView({
   users,
   roles,
   onCreateVoucher,
-  onDeleteVoucher,
+  onVoidVoucher,
   onStockMovement,
   onUpdateSettings,
   onCreateUser,
@@ -302,7 +302,7 @@ export function InvoicesSettingsView({
           movements={movements}
           vouchers={vouchers}
           onCreateVoucher={onCreateVoucher}
-          onDeleteVoucher={onDeleteVoucher}
+          onVoidVoucher={onVoidVoucher}
           onStockMovement={onStockMovement}
           onNotify={onNotify}
         />

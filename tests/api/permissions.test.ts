@@ -33,6 +33,7 @@ const CASHIER_FORBIDDEN: Array<[Method, string]> = [
   ['post', '/api/purchases/1/pay'],
   ['post', '/api/vouchers'],
   ['delete', '/api/vouchers/1'],
+  ['post', '/api/vouchers/1/void'],
   ['post', '/api/invoices/1/credit-note'],
   ['post', '/api/invoices/1/retry'],
 ];

@@ -45,6 +45,7 @@ import {
 } from './src/permissions.ts';
 import { scopeForUser } from './src/server/visibility.ts';
 import { isValidVatNumber } from './src/validation.ts';
+import { nextDocumentNumber } from './src/server/sequences.ts';
 import type {
   AuthUser,
   FontSizeLevel,
@@ -631,47 +632,82 @@ app.post('/api/vouchers', requirePermission('vouchers.manage'), (req: Request, r
     return;
   }
 
-  const prefix = voucherType === 'receipt' ? 'RCV' : 'PAY';
-  const countRow = db
-    .prepare('SELECT COUNT(*) as cnt FROM vouchers WHERE voucher_type = ?')
-    .get(voucherType) as { cnt: number };
-  const voucherNumber = `${prefix}-${new Date().getFullYear()}-${String(countRow.cnt + 1).padStart(5, '0')}`;
   const now = new Date().toISOString();
 
-  const info = db
-    .prepare(`
-      INSERT INTO vouchers (
-        voucher_number, voucher_type, payment_channel, party_name, category,
-        amount, notes, voucher_date, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    .run(
-      voucherNumber,
-      voucherType,
-      paymentChannel,
-      partyName,
-      category || (voucherType === 'receipt' ? 'إيرادات أخرى' : 'مصروفات تشغيلية'),
-      Number(amount.toFixed(2)),
-      notes,
-      voucherDate,
-      now
-    );
+  // Number and row are written in one transaction (R1.8): no duplicates, no gaps on failure.
+  const voucherId = db.transaction(() => {
+    const voucherNumber = nextDocumentNumber(db, voucherType === 'receipt' ? 'RCV' : 'PAY');
+    const info = db
+      .prepare(`
+        INSERT INTO vouchers (
+          voucher_number, voucher_type, payment_channel, party_name, category,
+          amount, notes, voucher_date, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        voucherNumber,
+        voucherType,
+        paymentChannel,
+        partyName,
+        category || (voucherType === 'receipt' ? 'إيرادات أخرى' : 'مصروفات تشغيلية'),
+        Number(amount.toFixed(2)),
+        notes,
+        voucherDate,
+        now
+      );
+    return Number(info.lastInsertRowid);
+  })();
 
   const vouchers = getAllVouchers();
   res.status(201).json({
-    voucher: vouchers.find((v) => v.id === Number(info.lastInsertRowid)),
+    voucher: vouchers.find((v) => v.id === voucherId),
     vouchers,
   });
 });
 
-app.delete('/api/vouchers/:id', requirePermission('vouchers.manage'), (req: Request, res: Response) => {
+// Financial vouchers are never deleted (R1.8, SEC-17): they are voided with a reason.
+app.delete('/api/vouchers/:id', requirePermission('vouchers.manage'), (_req: Request, res: Response) => {
+  res.status(405).json({
+    error: 'Vouchers cannot be deleted. Void the voucher with a reason instead.',
+    code: 'VOUCHER_DELETE_NOT_ALLOWED',
+  });
+});
+
+app.post('/api/vouchers/:id/void', requirePermission('vouchers.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
+  const authUser = res.locals.authUser as AuthUser;
+  const reason = String((req.body as Record<string, unknown>).reason ?? '').trim();
+
   if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ error: 'Invalid voucher ID.' });
+    res.status(400).json({ error: 'Invalid voucher ID.', code: 'INVALID_ID' });
     return;
   }
-  db.prepare('DELETE FROM vouchers WHERE id = ?').run(id);
-  res.json({ vouchers: getAllVouchers() });
+  if (reason.length < 3 || reason.length > 300) {
+    res.status(400).json({
+      error: 'A reason of 3 to 300 characters is required to void a voucher.',
+      code: 'VOID_REASON_REQUIRED',
+    });
+    return;
+  }
+
+  const voucher = db.prepare('SELECT id, status FROM vouchers WHERE id = ?').get(id) as
+    | { id: number; status: string }
+    | undefined;
+  if (!voucher) {
+    res.status(404).json({ error: 'Voucher not found.', code: 'NOT_FOUND' });
+    return;
+  }
+  if (voucher.status === 'void') {
+    res.status(409).json({ error: 'This voucher is already void.', code: 'ALREADY_VOID' });
+    return;
+  }
+
+  db.prepare(`
+    UPDATE vouchers SET status = 'void', void_reason = ?, voided_at = ?, voided_by = ? WHERE id = ?
+  `).run(reason, new Date().toISOString(), authUser.id, id);
+
+  const vouchers = getAllVouchers();
+  res.json({ voucher: vouchers.find((v) => v.id === id), vouchers });
 });
 
 // Organization, Thermal Print & ZATCA settings
@@ -1258,9 +1294,8 @@ app.post('/api/purchases', requirePermission('purchases.manage'), (req: Request,
       }
 
       const now = new Date().toISOString();
-      const countRow = db.prepare('SELECT COUNT(*) as cnt FROM purchases').get() as { cnt: number };
-      const nextNum = countRow.cnt + 1;
-      const purchaseNumber = `PO-${now.slice(0, 4)}-${String(nextNum).padStart(5, '0')}`;
+      // Atomic yearly number (R1.8) instead of COUNT(*)+1.
+      const purchaseNumber = nextDocumentNumber(db, 'PO');
 
       let subtotal = 0;
       let vatTotal = 0;
@@ -1607,7 +1642,8 @@ app.post('/api/invoices', requirePermission('pos.access'), asyncHandler(async (r
       const issueTime = createdAt.slice(11, 19);
       const nextIcv = (org.last_icv || 0) + 1;
       const uuid = crypto.randomUUID();
-      const invoiceNumber = `INV-${issueDate.slice(0, 4)}-${String(nextIcv).padStart(5, '0')}`;
+      // Own yearly sequence (R1.8); ICV stays for the ZATCA chain only until R1.4.
+      const invoiceNumber = nextDocumentNumber(db, 'INV');
 
       const lineItems: InvoiceItem[] = [];
       let rawSubtotal = 0;
@@ -1922,7 +1958,8 @@ app.post('/api/invoices/:id/credit-note', requirePermission('sales.return'), asy
     const issueTime = createdAt.slice(11, 19);
     const nextIcv = (org.last_icv || 0) + 1;
     const uuid = crypto.randomUUID();
-    const invoiceNumber = `CN-${issueDate.slice(0, 4)}-${String(nextIcv).padStart(5, '0')}`;
+    // Credit notes have their own sequence (R1.8): they no longer consume invoice numbers.
+    const invoiceNumber = nextDocumentNumber(db, 'CN');
 
     for (const item of sourceItems) {
       const prod = db.prepare('SELECT stock_qty FROM products WHERE id = ?').get(item.product_id) as

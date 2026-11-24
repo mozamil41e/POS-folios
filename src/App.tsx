@@ -601,17 +601,22 @@ function PosWorkspace({
     notify(isAr ? 'تم حفظ السند بنجاح' : 'Voucher saved');
   };
 
-  const handleDeleteVoucher = async (id: number) => {
-    const res = await apiFetch(`/api/vouchers/${id}`, { method: 'DELETE' });
+  // Vouchers are voided with a reason, never deleted (R1.8).
+  const handleVoidVoucher = async (id: number, reason: string) => {
+    const res = await apiFetch(`/api/vouchers/${id}/void`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
     const body = (await res.json()) as { error?: string; vouchers?: Voucher[] };
     if (!res.ok) {
-      notify(body.error || 'Failed to delete voucher', 'error');
+      notify(body.error || 'Failed to void voucher', 'error');
       return;
     }
     if (body.vouchers) {
       setData((prev) => (prev ? { ...prev, vouchers: body.vouchers! } : prev));
     }
-    notify(isAr ? 'تم حذف السند' : 'Voucher deleted');
+    notify(isAr ? 'تم إلغاء السند' : 'Voucher voided');
   };
 
   const handleUpdateSettings = async (payload: Partial<OrganizationSettings>) => {
@@ -1154,7 +1159,7 @@ function PosWorkspace({
                 users={data.users ?? []}
                 roles={data.roles ?? []}
                 onCreateVoucher={handleCreateVoucher}
-                onDeleteVoucher={handleDeleteVoucher}
+                onVoidVoucher={handleVoidVoucher}
                 onStockMovement={handleStockMovement}
                 onUpdateSettings={handleUpdateSettings}
                 onCreateUser={handleCreateUser}

@@ -26,6 +26,7 @@ import {
   generateEgsKeyPair,
   signXmlAndBuildQr,
 } from './zatca.ts';
+import { nextDocumentNumber, syncDocumentSequences } from './sequences.ts';
 
 // MIZAN_DB_PATH lets automated tests use an isolated temporary database.
 // When it is not set, the default location (./data/mizan-pos.db) is unchanged.
@@ -268,6 +269,14 @@ export function initDatabase(): void {
       voucher_date TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    -- Atomic yearly document numbering (R1.8): see src/server/sequences.ts
+    CREATE TABLE IF NOT EXISTS document_sequences (
+      doc_type TEXT NOT NULL,
+      period_year INTEGER NOT NULL,
+      last_value INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (doc_type, period_year)
+    );
   `);
 
   const orgCols = db
@@ -308,6 +317,25 @@ export function initDatabase(): void {
   if (!userColNames.has('last_login_at')) {
     db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
   }
+
+  // Vouchers are voided, never deleted (R1.8, SEC-17). Additive, non-destructive.
+  const voucherCols = db.prepare('PRAGMA table_info(vouchers)').all() as Array<{ name: string }>;
+  const voucherColNames = new Set(voucherCols.map((c) => c.name));
+  if (!voucherColNames.has('status')) {
+    db.exec("ALTER TABLE vouchers ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+  }
+  if (!voucherColNames.has('void_reason')) {
+    db.exec("ALTER TABLE vouchers ADD COLUMN void_reason TEXT NOT NULL DEFAULT ''");
+  }
+  if (!voucherColNames.has('voided_at')) {
+    db.exec('ALTER TABLE vouchers ADD COLUMN voided_at TEXT');
+  }
+  if (!voucherColNames.has('voided_by')) {
+    db.exec('ALTER TABLE vouchers ADD COLUMN voided_by INTEGER');
+  }
+
+  // Never reissue a number that already exists in this database.
+  syncDocumentSequences(db);
 
   seedAndMigrateRolesAndUsers();
 
@@ -477,7 +505,7 @@ function seedInitialVouchers(): void {
   `);
 
   insert.run(
-    'RCV-2026-00001',
+    nextDocumentNumber(db, 'RCV'),
     'receipt',
     'cash',
     'عهدة الصندوق الافتتاحية',
@@ -488,7 +516,7 @@ function seedInitialVouchers(): void {
     created
   );
   insert.run(
-    'PAY-2026-00001',
+    nextDocumentNumber(db, 'PAY'),
     'payment',
     'cash',
     'شركة الكهرباء والخدمات',
@@ -499,7 +527,7 @@ function seedInitialVouchers(): void {
     created
   );
   insert.run(
-    'PAY-2026-00002',
+    nextDocumentNumber(db, 'PAY'),
     'payment',
     'bank',
     'مؤسسة التوصيل السريع',
@@ -562,7 +590,7 @@ function seedInitialInvoices(): void {
     const createdAt = createdAtDate.toISOString();
     const issueDate = createdAt.slice(0, 10);
     const issueTime = createdAt.slice(11, 19);
-    const invoiceNumber = `INV-2026-${String(currentIcv).padStart(5, '0')}`;
+    const invoiceNumber = nextDocumentNumber(db, 'INV');
 
     const items: InvoiceItem[] = s.lines.map((l) => {
       const lineSub = Number((l.product.sell_price * l.qty).toFixed(2));
@@ -760,9 +788,9 @@ function seedInitialSuppliersAndPurchases(): void {
         INSERT INTO purchases (
           purchase_number, supplier_id, supplier_name, supplier_vat, supplier_invoice_no,
           payment_status, paid_amount, subtotal, vat_total, grand_total, notes, received_at, created_at
-        ) VALUES ('PO-2026-00001', ?, 'شركة المراعي للتوريد الغذائي', '300051472900003', 'SUP-INV-9921', 'paid', ?, ?, ?, ?, 'توريد ألبان أسبوعي', ?, ?)
+        ) VALUES (?, ?, 'شركة المراعي للتوريد الغذائي', '300051472900003', 'SUP-INV-9921', 'paid', ?, ?, ?, ?, 'توريد ألبان أسبوعي', ?, ?)
       `)
-      .run(sup1.lastInsertRowid, p1Grand, p1Sub, p1Vat, p1Grand, p1Date, p1Date);
+      .run(nextDocumentNumber(db, 'PO'), sup1.lastInsertRowid, p1Grand, p1Sub, p1Vat, p1Grand, p1Date, p1Date);
 
     const insertPoItem = db.prepare(`
       INSERT INTO purchase_items (
@@ -803,9 +831,9 @@ function seedInitialSuppliersAndPurchases(): void {
         INSERT INTO purchases (
           purchase_number, supplier_id, supplier_name, supplier_vat, supplier_invoice_no,
           payment_status, paid_amount, subtotal, vat_total, grand_total, notes, received_at, created_at
-        ) VALUES ('PO-2026-00002', ?, 'مؤسسة النخبة للسلع الاستهلاكية', '310294857100003', 'NK-2026-441', 'credit', 0, ?, ?, ?, 'فاتورة مشتريات آجلة لمدة 30 يوماً', ?, ?)
+        ) VALUES (?, ?, 'مؤسسة النخبة للسلع الاستهلاكية', '310294857100003', 'NK-2026-441', 'credit', 0, ?, ?, ?, 'فاتورة مشتريات آجلة لمدة 30 يوماً', ?, ?)
       `)
-      .run(sup2.lastInsertRowid, p2Sub, p2Vat, p2Grand, p2Date, p2Date);
+      .run(nextDocumentNumber(db, 'PO'), sup2.lastInsertRowid, p2Sub, p2Vat, p2Grand, p2Date, p2Date);
 
     for (const item of p2Items) {
       const lSub = Number((item.qty * item.cost).toFixed(2));

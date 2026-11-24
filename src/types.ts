@@ -261,6 +261,11 @@ export interface Voucher {
   notes: string;
   voucher_date: string;
   created_at: string;
+  /** Vouchers are voided, never deleted (R1.8). Void vouchers are excluded from all totals. */
+  status: 'active' | 'void';
+  void_reason: string;
+  voided_at: string | null;
+  voided_by: number | null;
 }
 
 export interface AuthUser {

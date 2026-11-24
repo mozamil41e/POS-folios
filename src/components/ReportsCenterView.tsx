@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Ban,
   ArrowRight,
   ChevronDown,
   Download,
@@ -11,7 +12,6 @@ import {
   RotateCcw,
   Search,
   ShoppingBag,
-  Trash2,
   TrendingUp,
   Users,
   Wallet,
@@ -95,7 +95,8 @@ interface ReportsCenterViewProps {
     notes: string;
     voucher_date: string;
   }) => Promise<void>;
-  onDeleteVoucher: (id: number) => Promise<void>;
+  /** Vouchers are voided with a reason, never deleted (R1.8). */
+  onVoidVoucher: (id: number, reason: string) => Promise<void>;
   onStockMovement: (payload: {
     product_id: number;
     type: 'purchase' | 'adjustment' | 'return';
@@ -177,7 +178,7 @@ export function ReportsCenterView({
   movements,
   vouchers,
   onCreateVoucher,
-  onDeleteVoucher,
+  onVoidVoucher,
   onStockMovement,
   onNotify,
 }: ReportsCenterViewProps) {
@@ -422,9 +423,11 @@ export function ReportsCenterView({
     const scopedPurchases = purchases.filter((p) =>
       inDateRange(p.received_at || p.created_at, fromDate, toDate)
     );
-    const scopedVouchers = vouchers.filter((v) =>
+    // Void vouchers (R1.8) stay listed in the vouchers report but never count in totals.
+    const scopedAllVouchers = vouchers.filter((v) =>
       inDateRange(v.voucher_date || v.created_at, fromDate, toDate)
     );
+    const scopedVouchers = scopedAllVouchers.filter((v) => v.status !== 'void');
     const scopedMovements = movements.filter((m) =>
       inDateRange(m.created_at, fromDate, toDate)
     );
@@ -1227,16 +1230,22 @@ export function ReportsCenterView({
             { key: 'category', label: isAr ? 'التصنيف' : 'Category', align: 'start' },
             { key: 'amount', label: isAr ? 'المبلغ' : 'Amount', align: 'end', mono: true },
           ],
-          rows: scopedVouchers.map((v) => ({
+          rows: scopedAllVouchers.map((v) => ({
             id: `v-${v.id}`,
-            voucherId: v.id,
-            searchBlob: `${v.voucher_number} ${v.party_name} ${v.category} ${v.notes}`,
+            voucherId: v.status === 'void' ? undefined : v.id,
+            searchBlob: `${v.voucher_number} ${v.party_name} ${v.category} ${v.notes}${
+              v.status === 'void' ? ` ملغى void ${v.void_reason}` : ''
+            }`,
             tone: v.voucher_type === 'receipt' ? 'positive' : 'negative',
             cells: {
               no: v.voucher_number,
               date: v.voucher_date,
               type:
-                v.voucher_type === 'receipt'
+                v.status === 'void'
+                  ? isAr
+                    ? `ملغى — ${v.void_reason}`
+                    : `VOID — ${v.void_reason}`
+                  : v.voucher_type === 'receipt'
                   ? isAr
                     ? 'سند قبض (+)'
                     : 'Receipt (+)'
@@ -2501,6 +2510,24 @@ export function ReportsCenterView({
     }, 1500);
   };
 
+  const handleVoidVoucher = (id: number) => {
+    // Simple prompt for now; a proper dialog comes with the UI kit (R4).
+    const reason = window.prompt(
+      isAr
+        ? 'سبب إلغاء السند (مطلوب). السند الملغى يبقى ظاهراً ولا يدخل في أي مجموع.'
+        : 'Reason for voiding this voucher (required). It stays listed but is excluded from all totals.'
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 3) {
+      onNotify(
+        isAr ? 'يجب كتابة سبب الإلغاء (3 أحرف على الأقل)' : 'Please enter a reason (at least 3 characters)',
+        'error'
+      );
+      return;
+    }
+    void onVoidVoucher(id, reason.trim());
+  };
+
   const handleSubmitVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(voucherForm.amount);
@@ -2903,11 +2930,11 @@ export function ReportsCenterView({
                       {row.voucherId ? (
                         <button
                           type="button"
-                          onClick={() => void onDeleteVoucher(row.voucherId!)}
-                          title={isAr ? 'حذف السند' : 'Delete Voucher'}
+                          onClick={() => handleVoidVoucher(row.voucherId!)}
+                          title={isAr ? 'إلغاء السند' : 'Void Voucher'}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Ban className="w-3.5 h-3.5" />
                         </button>
                       ) : (
                         <span className="text-slate-300 dark:text-slate-700">—</span>
