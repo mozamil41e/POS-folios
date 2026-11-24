@@ -45,6 +45,14 @@ import {
   recordLoginFailure,
 } from './src/server/login-guard.ts';
 import {
+  InputError,
+  parseCustomerInput,
+  parseMovementInput,
+  parseOpeningStock,
+  parseProductInput,
+  parseSupplierInput,
+} from './src/server/input-rules.ts';
+import {
   contentSecurityPolicy,
   createRateLimiters,
   noIndex,
@@ -53,6 +61,7 @@ import {
 } from './src/server/security.ts';
 import type {
   AuthUser,
+  Customer,
   FontSizeLevel,
   Invoice,
   InvoiceItem,
@@ -842,6 +851,16 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
     res.status(400).json({ error: 'Store name and VAT number are required.' });
     return;
   }
+  // R1.10 (owner approved): the restaurant's own VAT number goes on every receipt.
+  if (!isValidVatNumber(vatNumber)) {
+    res.status(400).json({
+      error: 'VAT number must be 15 digits starting and ending with 3.',
+      code: 'VALIDATION_FAILED',
+      field: 'vat_number',
+      reason: 'INVALID_VAT',
+    });
+    return;
+  }
 
   db.prepare(`
     UPDATE organization_settings
@@ -870,25 +889,33 @@ app.put('/api/settings', requirePermission('settings.manage'), (req: Request, re
 });
 
 // Product CRUD
+const SKU_EXISTS_RESPONSE = { error: 'SKU/Barcode already exists.', code: 'SKU_EXISTS', field: 'sku' };
+const skuTaken = (sku: string, exceptId = 0) =>
+  Boolean(db.prepare('SELECT id FROM products WHERE sku = ? AND id != ?').get(sku, exceptId));
+
 app.post('/api/products', requirePermission('inventory.manage'), (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
-  const sku = String(b.sku ?? '').trim();
-  const nameAr = String(b.name_ar ?? '').trim();
-  const nameEn = String(b.name_en ?? '').trim() || nameAr;
-  const categoryAr = String(b.category_ar ?? 'عام').trim();
-  const categoryEn = String(b.category_en ?? 'General').trim();
-  const unitAr = String(b.unit_ar ?? 'حبة').trim();
-  const unitEn = String(b.unit_en ?? 'Pcs').trim();
-  const costPrice = Number(b.cost_price ?? 0);
-  const sellPrice = Number(b.sell_price ?? 0);
-  const taxRate = Number(b.tax_rate ?? 15);
-  const taxCategory = (['S', 'Z', 'E'].includes(String(b.tax_category)) ? String(b.tax_category) : 'S') as 'S' | 'Z' | 'E';
-  const stockQty = Math.max(0, Math.floor(Number(b.stock_qty ?? 0)));
-  const minStockAlert = Math.max(0, Math.floor(Number(b.min_stock_alert ?? 10)));
-  const expiryDate = b.expiry_date ? String(b.expiry_date).trim() : null;
+  // R1.10 (SEC-19): every field validated; throws InputError -> 400 VALIDATION_FAILED.
+  const input = parseProductInput(b);
+  const stockQty = parseOpeningStock(b);
+  const {
+    sku,
+    name_ar: nameAr,
+    name_en: nameEn,
+    category_ar: categoryAr,
+    category_en: categoryEn,
+    unit_ar: unitAr,
+    unit_en: unitEn,
+    cost_price: costPrice,
+    sell_price: sellPrice,
+    tax_rate: taxRate,
+    tax_category: taxCategory,
+    min_stock_alert: minStockAlert,
+    expiry_date: expiryDate,
+  } = input;
 
-  if (!sku || !nameAr || Number.isNaN(sellPrice) || sellPrice <= 0) {
-    res.status(400).json({ error: 'Valid SKU, Arabic name, and positive selling price are required.' });
+  if (skuTaken(sku)) {
+    res.status(409).json(SKU_EXISTS_RESPONSE);
     return;
   }
 
@@ -940,11 +967,12 @@ app.post('/api/products', requirePermission('inventory.manage'), (req: Request, 
       movements: getRecentMovements(80),
     });
   } catch (err) {
-    res.status(400).json({
-      error: err instanceof Error && err.message.includes('UNIQUE')
-        ? 'SKU/Barcode already exists.'
-        : 'Failed to create product.',
-    });
+    // Two requests creating the same SKU at once: the UNIQUE index decides.
+    if (err instanceof Error && err.message.includes('UNIQUE')) {
+      res.status(409).json(SKU_EXISTS_RESPONSE);
+      return;
+    }
+    throw err;
   }
 });
 
@@ -956,7 +984,12 @@ app.put('/api/products/:id', requirePermission('inventory.manage'), (req: Reques
     return;
   }
 
-  const b = req.body as Record<string, unknown>;
+  // R1.10 (SEC-19): fields not sent keep their value; stock changes only through movements.
+  const input = parseProductInput(req.body as Record<string, unknown>, existing);
+  if (skuTaken(input.sku, id)) {
+    res.status(409).json(SKU_EXISTS_RESPONSE);
+    return;
+  }
   const now = new Date().toISOString();
 
   db.prepare(`
@@ -966,19 +999,19 @@ app.put('/api/products/:id', requirePermission('inventory.manage'), (req: Reques
         tax_rate = ?, tax_category = ?, min_stock_alert = ?, expiry_date = ?, updated_at = ?
     WHERE id = ?
   `).run(
-    String(b.sku ?? existing.sku).trim(),
-    String(b.name_ar ?? existing.name_ar).trim(),
-    String(b.name_en ?? existing.name_en).trim(),
-    String(b.category_ar ?? existing.category_ar).trim(),
-    String(b.category_en ?? existing.category_en).trim(),
-    String(b.unit_ar ?? existing.unit_ar).trim(),
-    String(b.unit_en ?? existing.unit_en).trim(),
-    Number(b.cost_price ?? existing.cost_price),
-    Number(b.sell_price ?? existing.sell_price),
-    Number(b.tax_rate ?? existing.tax_rate),
-    String(b.tax_category ?? existing.tax_category),
-    Math.max(0, Math.floor(Number(b.min_stock_alert ?? existing.min_stock_alert))),
-    b.expiry_date === null || b.expiry_date === '' ? null : String(b.expiry_date ?? existing.expiry_date ?? ''),
+    input.sku,
+    input.name_ar,
+    input.name_en,
+    input.category_ar,
+    input.category_en,
+    input.unit_ar,
+    input.unit_en,
+    input.cost_price,
+    input.sell_price,
+    input.tax_rate,
+    input.tax_category,
+    input.min_stock_alert,
+    input.expiry_date,
     now,
     id
   );
@@ -994,17 +1027,14 @@ app.delete('/api/products/:id', requirePermission('inventory.manage'), (req: Req
 
 // Inventory movement (purchase / adjustment / return)
 app.post('/api/inventory/movement', requirePermission('inventory.adjust'), (req: Request, res: Response) => {
-  const b = req.body as Record<string, unknown>;
-  const productId = Number(b.product_id);
-  const type = String(b.type ?? 'purchase');
-  const qty = Math.floor(Number(b.qty ?? 0));
-  const notes = String(b.notes ?? '').trim();
-  const referenceNo = String(b.reference_no ?? `STK-${Date.now().toString().slice(-6)}`).trim();
-
-  if (!['purchase', 'adjustment', 'return'].includes(type) || qty === 0) {
-    res.status(400).json({ error: 'Valid movement type and non-zero quantity are required.' });
-    return;
-  }
+  // R1.10 (SEC-19): validated input; throws InputError -> 400 VALIDATION_FAILED.
+  const {
+    product_id: productId,
+    type,
+    qty,
+    notes,
+    reference_no: referenceNo,
+  } = parseMovementInput(req.body as Record<string, unknown>);
 
   try {
     const moveTx = db.transaction(() => {
@@ -1014,7 +1044,12 @@ app.post('/api/inventory/movement', requirePermission('inventory.adjust'), (req:
       }
 
       const delta = type === 'purchase' || type === 'return' ? Math.abs(qty) : qty;
-      const newBalance = Math.max(0, product.stock_qty + delta);
+      const newBalance = product.stock_qty + delta;
+      // DB-11, owner's option (a): refuse instead of clamping at 0, so the
+      // ledger (sum of qty_delta) always equals the stock balance.
+      if (newBalance < 0) {
+        throw new Error(`INSUFFICIENT_STOCK:${product.stock_qty}`);
+      }
       const now = new Date().toISOString();
 
       db.prepare('UPDATE products SET stock_qty = ?, updated_at = ? WHERE id = ?').run(
@@ -1035,29 +1070,36 @@ app.post('/api/inventory/movement', requirePermission('inventory.adjust'), (req:
       movements: getRecentMovements(80),
     });
   } catch (err) {
-    res.status(400).json({
-      error: err instanceof Error && err.message === 'PRODUCT_NOT_FOUND'
-        ? 'Product not found.'
-        : 'Inventory movement failed.',
-    });
+    if (err instanceof Error && err.message === 'PRODUCT_NOT_FOUND') {
+      res.status(404).json({ error: 'Product not found.', code: 'PRODUCT_NOT_FOUND' });
+      return;
+    }
+    if (err instanceof Error && err.message.startsWith('INSUFFICIENT_STOCK:')) {
+      const available = Number(err.message.split(':')[1]);
+      res.status(400).json({
+        error: `Not enough stock: only ${available} available.`,
+        code: 'INSUFFICIENT_STOCK',
+        field: 'qty',
+        available,
+      });
+      return;
+    }
+    throw err;
   }
 });
 
 // Suppliers & Purchases CRUD
 app.post('/api/suppliers', requirePermission('purchases.manage'), (req: Request, res: Response) => {
-  const b = req.body as Record<string, unknown>;
-  const nameAr = String(b.name_ar ?? '').trim();
-  const nameEn = String(b.name_en ?? '').trim() || nameAr;
-  const vatNumber = String(b.vat_number ?? '').trim();
-  const crNumber = String(b.cr_number ?? '').trim();
-  const phone = String(b.phone ?? '').trim();
-  const email = String(b.email ?? '').trim();
-  const addressAr = String(b.address_ar ?? '').trim();
-
-  if (!nameAr) {
-    res.status(400).json({ error: 'Supplier name is required.' });
-    return;
-  }
+  // R1.10: name required; VAT number optional but valid when given (D12 format).
+  const {
+    name_ar: nameAr,
+    name_en: nameEn,
+    vat_number: vatNumber,
+    cr_number: crNumber,
+    phone,
+    email,
+    address_ar: addressAr,
+  } = parseSupplierInput(req.body as Record<string, unknown>);
 
   const info = db
     .prepare(`
@@ -1080,19 +1122,19 @@ app.put('/api/suppliers/:id', requirePermission('purchases.manage'), (req: Reque
     return;
   }
 
-  const b = req.body as Record<string, unknown>;
+  const input = parseSupplierInput(req.body as Record<string, unknown>, existing);
   db.prepare(`
     UPDATE suppliers
     SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?, phone = ?, email = ?, address_ar = ?
     WHERE id = ?
   `).run(
-    String(b.name_ar ?? existing.name_ar).trim(),
-    String(b.name_en ?? existing.name_en).trim(),
-    String(b.vat_number ?? existing.vat_number).trim(),
-    String(b.cr_number ?? existing.cr_number).trim(),
-    String(b.phone ?? existing.phone).trim(),
-    String(b.email ?? existing.email).trim(),
-    String(b.address_ar ?? existing.address_ar).trim(),
+    input.name_ar,
+    input.name_en,
+    input.vat_number,
+    input.cr_number,
+    input.phone,
+    input.email,
+    input.address_ar,
     id
   );
 
@@ -1304,18 +1346,15 @@ app.post('/api/purchases/:id/pay', requirePermission('purchases.manage'), (req: 
 
 // Customers CRUD for B2B
 app.post('/api/customers', requirePermission('customers.manage'), (req: Request, res: Response) => {
-  const b = req.body as Record<string, unknown>;
-  const nameAr = String(b.name_ar ?? '').trim();
-  const nameEn = String(b.name_en ?? '').trim() || nameAr;
-  const vatNumber = String(b.vat_number ?? '').trim();
-  const crNumber = String(b.cr_number ?? '').trim();
-  const addressAr = String(b.address_ar ?? '').trim();
-  const phone = String(b.phone ?? '').trim();
-
-  if (!nameAr) {
-    res.status(400).json({ error: 'Customer name is required.' });
-    return;
-  }
+  // R1.10: name required; VAT number optional but valid when given (D12 format).
+  const {
+    name_ar: nameAr,
+    name_en: nameEn,
+    vat_number: vatNumber,
+    cr_number: crNumber,
+    address_ar: addressAr,
+    phone,
+  } = parseCustomerInput(req.body as Record<string, unknown>);
 
   const now = new Date().toISOString();
   const info = db
@@ -1333,40 +1372,24 @@ app.post('/api/customers', requirePermission('customers.manage'), (req: Request,
 
 app.put('/api/customers/:id', requirePermission('customers.manage'), (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id) as
-    | {
-        id: number;
-        name_ar: string;
-        name_en: string;
-        vat_number: string;
-        cr_number: string;
-        address_ar: string;
-        phone: string;
-      }
-    | undefined;
+  const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id) as Customer | undefined;
   if (!existing) {
     res.status(404).json({ error: 'Customer not found.' });
     return;
   }
 
-  const b = req.body as Record<string, unknown>;
-  const nameAr = String(b.name_ar ?? existing.name_ar).trim();
-  if (!nameAr) {
-    res.status(400).json({ error: 'Customer name is required.' });
-    return;
-  }
-
+  const input = parseCustomerInput(req.body as Record<string, unknown>, existing);
   db.prepare(`
     UPDATE customers
     SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?, address_ar = ?, phone = ?
     WHERE id = ?
   `).run(
-    nameAr,
-    String(b.name_en ?? existing.name_en).trim() || nameAr,
-    String(b.vat_number ?? existing.vat_number).trim(),
-    String(b.cr_number ?? existing.cr_number).trim(),
-    String(b.address_ar ?? existing.address_ar).trim(),
-    String(b.phone ?? existing.phone).trim(),
+    input.name_ar,
+    input.name_en,
+    input.vat_number,
+    input.cr_number,
+    input.address_ar,
+    input.phone,
     id
   );
 
@@ -1777,6 +1800,11 @@ function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunc
   }
   if (e?.type === 'entity.too.large') {
     res.status(413).json({ error: 'Request body is too large.', code: 'PAYLOAD_TOO_LARGE' });
+    return;
+  }
+  // R1.10: invalid input names the field, so the UI can say what to fix.
+  if (err instanceof InputError) {
+    res.status(400).json({ error: err.message, code: 'VALIDATION_FAILED', field: err.field, reason: err.reason });
     return;
   }
 

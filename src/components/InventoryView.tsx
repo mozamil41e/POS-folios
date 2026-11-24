@@ -524,6 +524,7 @@ export function InventoryView({
                 <input
                   required
                   type="text"
+                  maxLength={64}
                   value={formState.sku}
                   onChange={(e) => setFormState({ ...formState, sku: e.target.value })}
                   className="w-full font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
@@ -536,6 +537,7 @@ export function InventoryView({
                 <input
                   required
                   type="text"
+                  maxLength={60}
                   value={formState.category_ar}
                   onChange={(e) =>
                     setFormState({
@@ -554,6 +556,7 @@ export function InventoryView({
                 <input
                   required
                   type="text"
+                  maxLength={120}
                   value={formState.name_ar}
                   onChange={(e) => setFormState({ ...formState, name_ar: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
@@ -565,6 +568,7 @@ export function InventoryView({
                 </label>
                 <input
                   type="text"
+                  maxLength={120}
                   value={formState.name_en}
                   onChange={(e) => setFormState({ ...formState, name_en: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
@@ -578,6 +582,7 @@ export function InventoryView({
                   required
                   type="number"
                   step="0.01"
+                  min="0"
                   value={formState.cost_price}
                   onChange={(e) => setFormState({ ...formState, cost_price: e.target.value })}
                   className="w-full font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
@@ -591,6 +596,7 @@ export function InventoryView({
                   required
                   type="number"
                   step="0.01"
+                  min="0.01"
                   value={formState.sell_price}
                   onChange={(e) => setFormState({ ...formState, sell_price: e.target.value })}
                   className="w-full font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
@@ -604,6 +610,8 @@ export function InventoryView({
                   <input
                     required
                     type="number"
+                    min="0"
+                    step="1"
                     value={formState.stock_qty}
                     onChange={(e) => setFormState({ ...formState, stock_qty: e.target.value })}
                     className="w-full font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
@@ -617,6 +625,8 @@ export function InventoryView({
                 <input
                   required
                   type="number"
+                  min="0"
+                  step="1"
                   value={formState.min_stock_alert}
                   onChange={(e) =>
                     setFormState({ ...formState, min_stock_alert: e.target.value })
@@ -725,6 +735,7 @@ export function InventoryView({
                 <input
                   required
                   type="number"
+                  step="1"
                   value={moveQty}
                   onChange={(e) => setMoveQty(e.target.value)}
                   className="w-full font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"

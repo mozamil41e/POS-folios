@@ -17,6 +17,7 @@ import type {
   VoucherType,
 } from './types';
 import { translations } from './i18n';
+import { describeApiError, type ApiErrorBody } from './api-errors';
 import { canViewCost, hasAnyPermission, hasPermission } from './permissions';
 import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
@@ -294,10 +295,13 @@ function PosWorkspace({
       );
       return null;
     }
-    const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+    const body = (await res.json().catch(() => null)) as (T & ApiErrorBody) | null;
     if (!res.ok || body === null) {
       // A 401 already ended the session (apiFetch); nothing more to report.
-      if (res.status !== 401) notify(body?.error || fallbackError, 'error');
+      // Known error codes are shown in the user's language (R1.10).
+      if (res.status !== 401) {
+        notify(describeApiError(body, lang) || body?.error || fallbackError, 'error');
+      }
       return null;
     }
     return body;

@@ -163,13 +163,17 @@ describe('POST /api/invoices — checkout (characterization)', () => {
   });
 
   it('rejects a B2B invoice for a customer without a valid VAT number', async () => {
-    const created = await request(t.app)
-      .post('/api/customers')
-      .set(bearer(adminToken))
-      .send({ name_ar: 'شركة بلا رقم ضريبي', name_en: '', vat_number: '12345', cr_number: '', address_ar: '', phone: '' });
+    // Since R1.10 the API refuses such a customer, so this simulates a record
+    // saved earlier: the checkout guard (D12) still protects old data.
+    const info = t.db
+      .prepare(
+        `INSERT INTO customers (name_ar, name_en, vat_number, cr_number, address_ar, phone, created_at)
+         VALUES ('شركة بلا رقم ضريبي', '', '12345', '', '', '', ?)`
+      )
+      .run(new Date().toISOString());
     const res = await sell(
       adminToken,
-      cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: '0100000', customer_id: created.body.customerId })
+      cashSale([{ product_id: SEED.water.id, qty: 1 }], { invoice_subtype: '0100000', customer_id: Number(info.lastInsertRowid) })
     );
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('CUSTOMER_VAT_INVALID');

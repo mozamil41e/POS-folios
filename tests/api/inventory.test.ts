@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { SEED, bearer, createTestApp, registerFirstAdmin, type TestApp } from '../helpers/app.ts';
 
-describe('products & inventory movements (characterization)', () => {
+describe('products & inventory movements', () => {
   let t: TestApp;
   let adminToken: string;
 
@@ -26,8 +26,8 @@ describe('products & inventory movements (characterization)', () => {
 
   it('rejects a duplicate SKU and missing required fields', async () => {
     const duplicate = await createProduct({ sku: 'TEST-001', name_ar: 'مكرر', sell_price: 5 });
-    expect(duplicate.status).toBe(400);
-    expect(duplicate.body.error).toBe('SKU/Barcode already exists.');
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body).toMatchObject({ code: 'SKU_EXISTS', field: 'sku' });
 
     const invalid = await createProduct({ sku: '', name_ar: '', sell_price: 0 });
     expect(invalid.status).toBe(400);
@@ -40,15 +40,22 @@ describe('products & inventory movements (characterization)', () => {
     expect(rice.stock_qty).toBe(SEED.rice.stock + 8);
   });
 
-  // CURRENT BEHAVIOUR (DB-11): an adjustment below zero is clamped to 0 but the
-  // ledger records the requested quantity, so the ledger no longer matches the
-  // balance. R1.10 fixes this — flip the qty_delta expectation then.
-  it('CURRENT BEHAVIOUR: clamps an oversized negative adjustment but logs the requested delta', async () => {
+  // DB-11 fixed in R1.10 (owner's option a): an adjustment below zero is refused,
+  // so the ledger can never disagree with the balance.
+  it('refuses an adjustment larger than the stock and changes nothing', async () => {
+    const before = t.db.prepare('SELECT COUNT(*) AS n FROM stock_movements').get() as { n: number };
     const res = await move({ product_id: SEED.coffee.id, type: 'adjustment', qty: -100, notes: 'wastage' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INSUFFICIENT_STOCK', available: SEED.coffee.stock });
+    const coffee = t.db.prepare('SELECT stock_qty FROM products WHERE id = ?').get(SEED.coffee.id) as { stock_qty: number };
+    expect(coffee.stock_qty).toBe(SEED.coffee.stock);
+    expect(t.db.prepare('SELECT COUNT(*) AS n FROM stock_movements').get()).toEqual(before);
+  });
+
+  it('allows an adjustment down to exactly zero', async () => {
+    const res = await move({ product_id: SEED.coffee.id, type: 'adjustment', qty: -SEED.coffee.stock, notes: 'count' });
     expect(res.status).toBe(200);
-    const coffee = res.body.products.find((p: { id: number }) => p.id === SEED.coffee.id);
-    expect(coffee.stock_qty).toBe(0);
-    expect(res.body.movements[0]).toMatchObject({ product_id: SEED.coffee.id, qty_delta: -100, balance_after: 0 });
+    expect(res.body.movements[0]).toMatchObject({ product_id: SEED.coffee.id, qty_delta: -SEED.coffee.stock, balance_after: 0 });
   });
 
   it('soft-deletes a product (hidden from the list, row kept)', async () => {
