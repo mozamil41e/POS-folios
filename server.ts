@@ -2015,7 +2015,13 @@ async function startServer(): Promise<void> {
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// Exported so automated tests can exercise the API without opening a port.
+export { app };
+
+// Vitest sets VITEST; in every other context (dev, production, Hostinger) the server starts as before.
+if (!process.env.VITEST) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}

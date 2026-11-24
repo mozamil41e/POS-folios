@@ -2,6 +2,8 @@ node_modules/
 build/
 dist/
 coverage/
+# Server bundle produced by `npm run build` (built on Hostinger, never committed)
+server.js
 .DS_Store
 *.log
 .env*
