@@ -30,9 +30,9 @@ import type {
   Voucher,
   VoucherChannel,
   VoucherType,
-} from '../types';
+} from '../../shared/types';
 import { formatDateTime, formatMoney } from '../i18n';
-import { hasPermission } from '../permissions';
+import { hasPermission } from '../../shared/permissions';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 export type ReportCategoryId =

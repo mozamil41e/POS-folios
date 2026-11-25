@@ -2,7 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { UsersPermissionsView } from '../../src/components/UsersPermissionsView.tsx';
-import type { RoleRecord } from '../../src/types.ts';
+import type { RoleRecord } from '../../shared/types.ts';
 import { CASHIER_PERMISSIONS, admin, resolves } from './fixtures.ts';
 
 const CASHIER_ROLE: RoleRecord = {

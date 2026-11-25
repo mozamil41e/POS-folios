@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Globe, KeyRound, Lock, Mail, Moon, Sun, User } from 'lucide-react';
-import type { AuthUser, Language } from '../types';
+import type { AuthUser, Language } from '../../shared/types';
 import { translations } from '../i18n';
-import { PASSWORD_MIN_LENGTH } from '../validation';
+import { PASSWORD_MIN_LENGTH } from '../../shared/validation';
 
 /** A pause imposed by the server (R1.9): 'account' = this email, 'network' = this IP. */
 interface SignInPause {

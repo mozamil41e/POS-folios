@@ -41,9 +41,9 @@ import {
   canViewData,
   sanitizePermissions,
   type VisibleDataKey,
-} from '../../../src/permissions.ts';
+} from '../../../shared/permissions.ts';
 import { scopeForUser } from '../../../src/server/visibility.ts';
-import { isValidPasswordLength, isValidVatNumber } from '../../../src/validation.ts';
+import { isValidPasswordLength, isValidVatNumber } from '../../../shared/validation.ts';
 import { nextDocumentNumber } from '../../../src/server/sequences.ts';
 import {
   clearLoginFailures,
@@ -83,8 +83,10 @@ import type {
   Supplier,
   VoucherChannel,
   VoucherType,
-} from '../../../src/types.ts';
+} from '../../../shared/types.ts';
 import type { AppConfig } from '../config/env.ts';
+import { roundMoney } from '../../../shared/money.ts';
+import { DOCUMENT_TYPES, INVOICE_KINDS, PAYMENT_METHODS } from '../../../shared/constants.ts';
 
 export interface LegacyContext {
   config: AppConfig;
@@ -716,7 +718,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
           paymentChannel,
           partyName,
           category || (voucherType === 'receipt' ? 'إيرادات أخرى' : 'مصروفات تشغيلية'),
-          Number(amount.toFixed(2)),
+          roundMoney(amount),
           notes,
           voucherDate,
           now
@@ -1318,9 +1320,9 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
             throw new Error('PRODUCT_NOT_FOUND');
           }
 
-          const lineSub = Number((qty * unitCost).toFixed(2));
-          const lineVat = Number((lineSub * (taxRate / 100)).toFixed(2));
-          const lineTotal = Number((lineSub + lineVat).toFixed(2));
+          const lineSub = roundMoney(qty * unitCost);
+          const lineVat = roundMoney(lineSub * (taxRate / 100));
+          const lineTotal = roundMoney(lineSub + lineVat);
           subtotal += lineSub;
           vatTotal += lineVat;
 
@@ -1335,9 +1337,9 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
           });
         }
 
-        subtotal = Number(subtotal.toFixed(2));
-        vatTotal = Number(vatTotal.toFixed(2));
-        const grandTotal = Number((subtotal + vatTotal).toFixed(2));
+        subtotal = roundMoney(subtotal);
+        vatTotal = roundMoney(vatTotal);
+        const grandTotal = roundMoney(subtotal + vatTotal);
         const paidAmount =
           paymentStatus === 'paid'
             ? grandTotal
@@ -1445,7 +1447,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
       return;
     }
 
-    const nextPaid = Math.min(purchase.grand_total, Number((purchase.paid_amount + amount).toFixed(2)));
+    const nextPaid = Math.min(purchase.grand_total, roundMoney(purchase.paid_amount + amount));
     const nextStatus: PurchasePaymentStatus =
       nextPaid >= purchase.grand_total - 0.01 ? 'paid' : 'partial';
 
@@ -1518,7 +1520,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
     const discount = Number(b.discount ?? 0);
     const customerId = b.customer_id ? Number(b.customer_id) : null;
     const invoiceSubtype: InvoiceSubtype =
-      b.invoice_subtype === '0100000' ? '0100000' : '0200000';
+      b.invoice_subtype === INVOICE_KINDS.TAX ? INVOICE_KINDS.TAX : INVOICE_KINDS.SIMPLIFIED;
 
     db.prepare(`
       INSERT INTO held_carts (label, items_json, discount, customer_id, invoice_subtype, created_at)
@@ -1545,22 +1547,22 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
     const authUser = res.locals.authUser as AuthUser;
     const rawItems = Array.isArray(b.items) ? (b.items as Array<Record<string, unknown>>) : [];
     const invoiceSubtype: InvoiceSubtype =
-      b.invoice_subtype === '0100000' ? '0100000' : '0200000';
+      b.invoice_subtype === INVOICE_KINDS.TAX ? INVOICE_KINDS.TAX : INVOICE_KINDS.SIMPLIFIED;
 
     // Sales invoices only (R1.5, SEC-09). Credit notes are issued through
     // POST /api/invoices/:id/credit-note, which links them to the original sale.
-    if (b.invoice_type_code !== undefined && b.invoice_type_code !== '388') {
+    if (b.invoice_type_code !== undefined && b.invoice_type_code !== DOCUMENT_TYPES.SALES_INVOICE) {
       res.status(400).json({
         error: 'Only sales invoices can be issued here.',
         code: 'INVALID_DOCUMENT_TYPE',
       });
       return;
     }
-    const invoiceTypeCode: InvoiceTypeCode = '388';
+    const invoiceTypeCode: InvoiceTypeCode = DOCUMENT_TYPES.SALES_INVOICE;
     const paymentMethod: PaymentMethod =
-      b.payment_method === 'card' || b.payment_method === 'split'
+      b.payment_method === PAYMENT_METHODS.CARD || b.payment_method === PAYMENT_METHODS.SPLIT
         ? (b.payment_method as PaymentMethod)
-        : 'cash';
+        : PAYMENT_METHODS.CASH;
     const discountTotal = Math.max(0, Number(b.discount_total ?? 0));
     const customerId = b.customer_id ? Number(b.customer_id) : null;
 
@@ -1590,7 +1592,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
       customerName = cust.name_ar;
       customerVat = cust.vat_number.trim();
     }
-    if (invoiceSubtype === '0100000') {
+    if (invoiceSubtype === INVOICE_KINDS.TAX) {
       if (!customerId) {
         res.status(400).json({
           error: 'A tax invoice (B2B) requires a registered customer.',
@@ -1649,9 +1651,9 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
             VALUES (?, 'sale', ?, ?, ?, 'بيع عبر نقطة البيع', ?)
           `).run(product.id, -qty, newStock, invoiceNumber, createdAt);
 
-          const lineSub = Number((product.sell_price * qty).toFixed(2));
-          const lineVat = Number((lineSub * (product.tax_rate / 100)).toFixed(2));
-          const lineTotal = Number((lineSub + lineVat).toFixed(2));
+          const lineSub = roundMoney(product.sell_price * qty);
+          const lineVat = roundMoney(lineSub * (product.tax_rate / 100));
+          const lineTotal = roundMoney(lineSub + lineVat);
           rawSubtotal += lineSub;
 
           lineItems.push({
@@ -1673,11 +1675,9 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
 
         const effectiveDiscount = Math.min(discountTotal, rawSubtotal);
         const discountRatio = rawSubtotal > 0 ? (rawSubtotal - effectiveDiscount) / rawSubtotal : 1;
-        const subtotal = Number((rawSubtotal - effectiveDiscount).toFixed(2));
-        const vatTotal = Number(
-          (lineItems.reduce((sum, item) => sum + item.line_vat, 0) * discountRatio).toFixed(2)
-        );
-        const grandTotal = Number((subtotal + vatTotal).toFixed(2));
+        const subtotal = roundMoney(rawSubtotal - effectiveDiscount);
+        const vatTotal = roundMoney(lineItems.reduce((sum, item) => sum + item.line_vat, 0) * discountRatio);
+        const grandTotal = roundMoney(subtotal + vatTotal);
 
         const cashAmount =
           paymentMethod === 'cash'
@@ -1689,7 +1689,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
           paymentMethod === 'card'
             ? grandTotal
             : paymentMethod === 'split'
-            ? Number((grandTotal - cashAmount).toFixed(2))
+            ? roundMoney(grandTotal - cashAmount)
             : 0;
 
         const invResult = db
@@ -1781,7 +1781,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
       res.status(404).json({ error: 'Original invoice not found.' });
       return;
     }
-    if (sourceInv.invoice_type_code !== '388') {
+    if (sourceInv.invoice_type_code !== DOCUMENT_TYPES.SALES_INVOICE) {
       res.status(400).json({ error: 'Credit note can only be issued for a sales invoice.' });
       return;
     }

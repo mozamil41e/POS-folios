@@ -16,7 +16,7 @@ import {
   revokeAllSessionsForUser,
 } from '../src/server/db.ts';
 import { clearLoginFailures } from '../src/server/login-guard.ts';
-import { isValidPasswordLength } from '../src/validation.ts';
+import { isValidPasswordLength } from '../shared/validation.ts';
 
 function fail(message: string): never {
   console.error(`create-admin: ${message}`);

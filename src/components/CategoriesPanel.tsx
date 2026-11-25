@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArrowDown, ArrowUp, Edit3, Plus, Trash2, X } from 'lucide-react';
-import type { Category, Language } from '../types';
+import type { Category, Language } from '../../shared/types';
 
 /**
  * Inventory > Categories (R1.11c, option a): add, rename, reorder (POS tab

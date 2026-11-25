@@ -8,9 +8,9 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
-import type { AuthUser, Invoice, Language, OrganizationSettings } from '../types';
+import type { AuthUser, Invoice, Language, OrganizationSettings } from '../../shared/types';
 import { formatDateTime, formatMoney } from '../i18n';
-import { hasPermission } from '../permissions';
+import { hasPermission } from '../../shared/permissions';
 import { QrCodeCanvas } from './QrCodeCanvas';
 
 interface InvoiceReceiptModalProps {

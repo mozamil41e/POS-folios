@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { ArrowDownUp, Edit3, PackagePlus, Search, X } from 'lucide-react';
-import type { AuthUser, Category, Language, Product, StockMovement } from '../types';
+import type { AuthUser, Category, Language, Product, StockMovement } from '../../shared/types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
-import { hasPermission } from '../permissions';
+import { hasPermission } from '../../shared/permissions';
 import { CategoriesPanel, type CategoryHandlers } from './CategoriesPanel';
 import { TablePagination, useTablePagination } from './TablePagination';
+import { roundMoney } from '../../shared/money';
 
 const NO_CATEGORIES: Category[] = [];
 
@@ -382,7 +383,7 @@ export function InventoryView({
                 </tr>
               ) : (
                 catalogPagination.pagedItems.map((p) => {
-                const priceIncl = Number((p.sell_price * (1 + p.tax_rate / 100)).toFixed(2));
+                const priceIncl = roundMoney(p.sell_price * (1 + p.tax_rate / 100));
                 const isOut = p.stock_qty <= 0;
                 const isLow = p.stock_qty > 0 && p.stock_qty <= p.min_stock_alert;
 

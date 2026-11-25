@@ -19,8 +19,8 @@ import type {
   StockMovement,
   Supplier,
   Voucher,
-} from '../types.ts';
-import { ALL_PERMISSION_KEYS, sanitizePermissions } from '../permissions.ts';
+} from '../../shared/types.ts';
+import { ALL_PERMISSION_KEYS, sanitizePermissions } from '../../shared/permissions.ts';
 import { syncDocumentSequences } from './sequences.ts';
 
 // MIZAN_DB_PATH lets automated tests use an isolated temporary database.

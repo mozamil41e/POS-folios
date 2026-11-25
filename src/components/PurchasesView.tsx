@@ -16,10 +16,11 @@ import type {
   Purchase,
   PurchasePaymentStatus,
   Supplier,
-} from '../types';
+} from '../../shared/types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
-import { hasPermission } from '../permissions';
+import { hasPermission } from '../../shared/permissions';
 import { TablePagination, useTablePagination } from './TablePagination';
+import { roundMoney } from '../../shared/money';
 
 interface PurchasesViewProps {
   lang: Language;
@@ -151,9 +152,9 @@ export function PurchasesView({
       0
     );
     return {
-      subtotal: Number(subtotal.toFixed(2)),
-      vat: Number(vat.toFixed(2)),
-      grandTotal: Number((subtotal + vat).toFixed(2)),
+      subtotal: roundMoney(subtotal),
+      vat: roundMoney(vat),
+      grandTotal: roundMoney(subtotal + vat),
     };
   }, [draftLines]);
 
@@ -431,7 +432,7 @@ export function PurchasesView({
                 </tr>
               ) : (
                 purchasesPagination.pagedItems.map((po) => {
-                  const due = Math.max(0, Number((po.grand_total - po.paid_amount).toFixed(2)));
+                  const due = Math.max(0, roundMoney(po.grand_total - po.paid_amount));
                   return (
                     <tr
                       key={po.id}

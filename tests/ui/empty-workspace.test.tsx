@@ -6,7 +6,7 @@ import { PosTerminalView } from '../../src/components/PosTerminalView.tsx';
 import { PurchasesView } from '../../src/components/PurchasesView.tsx';
 import { ReportsCenterView } from '../../src/components/ReportsCenterView.tsx';
 import { SalesView } from '../../src/components/SalesView.tsx';
-import type { OrganizationSettings } from '../../src/types.ts';
+import type { OrganizationSettings } from '../../shared/types.ts';
 import { SETTINGS, admin, callback, resolves } from './fixtures.ts';
 
 // R1.7: production now starts with no products, customers, invoices or

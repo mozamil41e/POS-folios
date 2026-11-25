@@ -5,7 +5,7 @@ import { InventoryView } from '../../src/components/InventoryView.tsx';
 import { InvoiceReceiptModal } from '../../src/components/InvoiceReceiptModal.tsx';
 import { PurchasesView } from '../../src/components/PurchasesView.tsx';
 import { SalesView } from '../../src/components/SalesView.tsx';
-import type { AuthUser } from '../../src/types.ts';
+import type { AuthUser } from '../../shared/types.ts';
 import { admin, callback, cashier, INVOICE, makeUser, PRODUCT, resolves, SETTINGS } from './fixtures.ts';
 
 // The server already refuses these actions (requirePermission); these tests

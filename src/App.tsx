@@ -16,10 +16,10 @@ import type {
   Voucher,
   VoucherChannel,
   VoucherType,
-} from './types';
+} from '../shared/types';
 import { translations } from './i18n';
 import { describeApiError, type ApiErrorBody } from './api-errors';
-import { canViewCost, hasAnyPermission, hasPermission } from './permissions';
+import { canViewCost, hasAnyPermission, hasPermission } from '../shared/permissions';
 import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
 import { SalesView } from './components/SalesView';

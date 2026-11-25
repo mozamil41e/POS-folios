@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { InventoryView } from '../../src/components/InventoryView.tsx';
 import { PosTerminalView } from '../../src/components/PosTerminalView.tsx';
-import type { AuthUser, Category } from '../../src/types.ts';
+import type { AuthUser, Category } from '../../shared/types.ts';
 import { CATEGORIES, CUSTOMER, DRINK, PRODUCT, admin, callback, cashier, makeUser, resolves } from './fixtures.ts';
 
 // R1.11c: Inventory > Categories, the category list in the product form, and

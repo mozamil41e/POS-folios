@@ -92,7 +92,7 @@ Do not assume that the target structure exists yet.
 - ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
 - `src/components/*View.tsx`: god components. `ReportsCenterView` is 3,206 lines and computes 25 reports in the browser.
-- Shared between client and server: `src/types.ts`, `src/permissions.ts`.
+- Shared between client and server (R2.2): `shared/` holds `types.ts`, `permissions.ts`, `validation.ts`, `money.ts` (`roundMoney`, `vatOf`, `lineAmounts`, `sumMoney`, `splitVatInclusive`) and `constants.ts`. Every stored or displayed total is computed with `roundMoney` (half away from zero, float-safe); `Number(x.toFixed(2))` is no longer used for amounts. The UI imports them without the `.ts` extension, the server with it.
 - Data flow:
   1. login
   2. the token is kept in memory

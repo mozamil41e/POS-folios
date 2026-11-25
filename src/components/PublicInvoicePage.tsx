@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Globe, Printer } from 'lucide-react';
-import type { InvoiceItem, Language } from '../types';
+import type { InvoiceItem, Language } from '../../shared/types';
 import { formatDateTime, formatMoney } from '../i18n';
 import { QrCodeCanvas } from './QrCodeCanvas';
 

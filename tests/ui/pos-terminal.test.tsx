@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PosTerminalView } from '../../src/components/PosTerminalView.tsx';
-import type { AuthUser, HeldCart } from '../../src/types.ts';
+import type { AuthUser, HeldCart } from '../../shared/types.ts';
 import { admin, callback, cashier, CUSTOMER, PRODUCT, resolves } from './fixtures.ts';
 
 function renderPos(

@@ -17,8 +17,8 @@ import type {
   Voucher,
   VoucherChannel,
   VoucherType,
-} from '../types';
-import { hasPermission } from '../permissions';
+} from '../../shared/types';
+import { hasPermission } from '../../shared/permissions';
 import { ReportsCenterView } from './ReportsCenterView';
 import { UsersPermissionsView } from './UsersPermissionsView';
 

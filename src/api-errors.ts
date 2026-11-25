@@ -1,4 +1,4 @@
-import type { Language } from './types';
+import type { Language } from '../shared/types';
 
 /**
  * Turns the server's stable error codes into messages for the user (R1.10).

@@ -1,6 +1,6 @@
 import { ValidationError } from '../../server/src/shared/errors.ts';
-import { isValidVatNumber } from '../validation.ts';
-import type { Customer, Product, Supplier } from '../types.ts';
+import { isValidVatNumber } from '../../shared/validation.ts';
+import type { Customer, Product, Supplier } from '../../shared/types.ts';
 
 /**
  * Input rules for the write routes that had none (R1.10, SEC-19), approved by

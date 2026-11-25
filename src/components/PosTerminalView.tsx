@@ -22,10 +22,11 @@ import type {
   Language,
   PaymentMethod,
   Product,
-} from '../types';
+} from '../../shared/types';
 import { formatMoney, translations } from '../i18n';
-import { hasPermission } from '../permissions';
-import { isValidVatNumber } from '../validation';
+import { hasPermission } from '../../shared/permissions';
+import { isValidVatNumber } from '../../shared/validation';
+import { roundMoney } from '../../shared/money';
 
 export interface CartLine {
   product: Product;
@@ -285,9 +286,9 @@ export function PosTerminalView({
       ? Math.min(rawSubtotal, Math.max(0, Number(discountInput) || 0))
       : 0;
     const ratio = rawSubtotal > 0 ? (rawSubtotal - discount) / rawSubtotal : 1;
-    const subtotal = Number((rawSubtotal - discount).toFixed(2));
-    const vat = Number((rawVat * ratio).toFixed(2));
-    const grandTotal = Number((subtotal + vat).toFixed(2));
+    const subtotal = roundMoney(rawSubtotal - discount);
+    const vat = roundMoney(rawVat * ratio);
+    const grandTotal = roundMoney(subtotal + vat);
 
     return { subtotal, discount, vat, grandTotal };
   }, [cart, discountInput, canDiscount]);
@@ -295,7 +296,7 @@ export function PosTerminalView({
   const cashReceivedNum = Number(cashTendered) || 0;
   const changeDue =
     paymentMethod === 'cash' && cashReceivedNum > totals.grandTotal
-      ? Number((cashReceivedNum - totals.grandTotal).toFixed(2))
+      ? roundMoney(cashReceivedNum - totals.grandTotal)
       : 0;
 
   const handleCompleteCheckout = async () => {
@@ -569,9 +570,7 @@ export function PosTerminalView({
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
             {filteredProducts.map((product) => {
-              const priceInclVat = Number(
-                (product.sell_price * (1 + product.tax_rate / 100)).toFixed(2)
-              );
+              const priceInclVat = roundMoney(product.sell_price * (1 + product.tax_rate / 100));
               const isOut = product.stock_qty <= 0;
               const isLow =
                 product.stock_qty > 0 &&

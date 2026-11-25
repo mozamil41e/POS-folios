@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
-import type { InvoiceItem } from '../types.ts';
+import type { InvoiceItem } from '../../shared/types.ts';
 import { db, getAllCustomers, getAllProducts, linkProductCategories } from './db.ts';
 import { nextDocumentNumber } from './sequences.ts';
+import { roundMoney } from '../../shared/money.ts';
 
 /**
  * Demo data for local development and the automated tests only (R1.7, H4).
@@ -240,9 +241,9 @@ function seedInitialInvoices(): void {
     const invoiceNumber = nextDocumentNumber(db, 'INV');
 
     const items: InvoiceItem[] = s.lines.map((l) => {
-      const lineSub = Number((l.product.sell_price * l.qty).toFixed(2));
-      const lineVat = Number((lineSub * (l.product.tax_rate / 100)).toFixed(2));
-      const lineTotal = Number((lineSub + lineVat).toFixed(2));
+      const lineSub = roundMoney(l.product.sell_price * l.qty);
+      const lineVat = roundMoney(lineSub * (l.product.tax_rate / 100));
+      const lineTotal = roundMoney(lineSub + lineVat);
       return {
         product_id: l.product.id,
         sku: l.product.sku,
@@ -260,9 +261,9 @@ function seedInitialInvoices(): void {
       };
     });
 
-    const subtotal = Number(items.reduce((a, b) => a + b.line_subtotal, 0).toFixed(2));
-    const vatTotal = Number(items.reduce((a, b) => a + b.line_vat, 0).toFixed(2));
-    const grandTotal = Number((subtotal + vatTotal).toFixed(2));
+    const subtotal = roundMoney(items.reduce((a, b) => a + b.line_subtotal, 0));
+    const vatTotal = roundMoney(items.reduce((a, b) => a + b.line_vat, 0));
+    const grandTotal = roundMoney(subtotal + vatTotal);
 
     const customerName = s.customer ? s.customer.name_ar : 'عميل نقدي / Cash Customer';
     const customerVat = s.customer ? s.customer.vat_number : '';
@@ -365,9 +366,9 @@ function seedInitialSuppliersAndPurchases(): void {
       { prod: products[0], qty: 24, cost: products[0].cost_price ?? 0 },
       { prod: products[7], qty: 18, cost: products[7].cost_price ?? 0 },
     ];
-    const p1Sub = Number(p1Items.reduce((s, i) => s + i.qty * i.cost, 0).toFixed(2));
-    const p1Vat = Number((p1Sub * 0.15).toFixed(2));
-    const p1Grand = Number((p1Sub + p1Vat).toFixed(2));
+    const p1Sub = roundMoney(p1Items.reduce((s, i) => s + i.qty * i.cost, 0));
+    const p1Vat = roundMoney(p1Sub * 0.15);
+    const p1Grand = roundMoney(p1Sub + p1Vat);
 
     const po1 = db
       .prepare(`
@@ -386,8 +387,8 @@ function seedInitialSuppliersAndPurchases(): void {
     `);
 
     for (const item of p1Items) {
-      const lSub = Number((item.qty * item.cost).toFixed(2));
-      const lVat = Number((lSub * 0.15).toFixed(2));
+      const lSub = roundMoney(item.qty * item.cost);
+      const lVat = roundMoney(lSub * 0.15);
       insertPoItem.run(
         po1.lastInsertRowid,
         item.prod.id,
@@ -399,7 +400,7 @@ function seedInitialSuppliersAndPurchases(): void {
         15,
         lSub,
         lVat,
-        Number((lSub + lVat).toFixed(2))
+        roundMoney(lSub + lVat)
       );
     }
 
@@ -408,9 +409,9 @@ function seedInitialSuppliersAndPurchases(): void {
       { prod: products[1], qty: 20, cost: products[1].cost_price ?? 0 },
       { prod: products[10], qty: 30, cost: products[10].cost_price ?? 0 },
     ];
-    const p2Sub = Number(p2Items.reduce((s, i) => s + i.qty * i.cost, 0).toFixed(2));
-    const p2Vat = Number((p2Sub * 0.15).toFixed(2));
-    const p2Grand = Number((p2Sub + p2Vat).toFixed(2));
+    const p2Sub = roundMoney(p2Items.reduce((s, i) => s + i.qty * i.cost, 0));
+    const p2Vat = roundMoney(p2Sub * 0.15);
+    const p2Grand = roundMoney(p2Sub + p2Vat);
 
     const po2 = db
       .prepare(`
@@ -422,8 +423,8 @@ function seedInitialSuppliersAndPurchases(): void {
       .run(nextDocumentNumber(db, 'PO'), sup2.lastInsertRowid, p2Sub, p2Vat, p2Grand, p2Date, p2Date);
 
     for (const item of p2Items) {
-      const lSub = Number((item.qty * item.cost).toFixed(2));
-      const lVat = Number((lSub * 0.15).toFixed(2));
+      const lSub = roundMoney(item.qty * item.cost);
+      const lVat = roundMoney(lSub * 0.15);
       insertPoItem.run(
         po2.lastInsertRowid,
         item.prod.id,
@@ -435,7 +436,7 @@ function seedInitialSuppliersAndPurchases(): void {
         15,
         lSub,
         lVat,
-        Number((lSub + lVat).toFixed(2))
+        roundMoney(lSub + lVat)
       );
     }
   }

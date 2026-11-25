@@ -21,10 +21,10 @@ import type {
   ManagedUser,
   PermissionKey,
   RoleRecord,
-} from '../types';
-import { ALL_PERMISSION_KEYS, PERMISSION_GROUPS } from '../permissions';
+} from '../../shared/types';
+import { ALL_PERMISSION_KEYS, PERMISSION_GROUPS } from '../../shared/permissions';
 import { formatDateTime } from '../i18n';
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../validation';
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../shared/validation';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 interface UsersPermissionsViewProps {

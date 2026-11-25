@@ -6,8 +6,8 @@
 // - organisation settings never include secrets. Since R1.4 (ZATCA removed) the
 //   settings table holds none; the legacy names stay blocked as a safety net in
 //   case an old, unmigrated database is ever served.
-import type { AuthUser, OrganizationSettings } from '../types.ts';
-import { DATA_VISIBILITY, canViewCost, canViewData, type VisibleDataKey } from '../permissions.ts';
+import type { AuthUser, OrganizationSettings } from '../../shared/types.ts';
+import { DATA_VISIBILITY, canViewCost, canViewData, type VisibleDataKey } from '../../shared/permissions.ts';
 
 const LEGACY_SECRET_FIELDS = [
   'private_key_pem',

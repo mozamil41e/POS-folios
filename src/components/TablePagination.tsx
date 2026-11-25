@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import type { Language } from '../types';
+import type { Language } from '../../shared/types';
 
 export function useTablePagination<T>(
   items: T[],

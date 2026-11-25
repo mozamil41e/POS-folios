@@ -119,7 +119,7 @@ const items = await trx.selectFrom('inventory_items')
 - Checkout accepts an `Idempotency-Key`. Store it on the invoice with a unique index. If the key repeats, return the existing invoice.
 
 ## Money & VAT (server is authoritative)
-- Compute through `shared/money.ts` in integer halalas, with one rounding rule (half-up, 2 decimals). mysql2 returns DECIMAL as **strings**, so convert them with the money helpers.
+- Compute through `shared/money.ts` (R2.2): `roundMoney` rounds half away from zero to 2 decimals after removing float noise; `lineAmounts`, `vatOf`, `sumMoney`, `splitVatInclusive`. Never `Number(x.toFixed(2))` for amounts. mysql2 returns DECIMAL as **strings**, so convert them with the money helpers.
 - Prices that include VAT (proposed restaurant default): `vat = round(gross * rate / (100 + rate))`, `net = gross - vat`.
 - Prices that exclude VAT: `vat = round(net * rate / 100)`.
 - Discounts: allocate the document discount **proportionally to the lines before line VAT**, and put the rounding remainder on the largest line, so that the line totals add up exactly to the document total.

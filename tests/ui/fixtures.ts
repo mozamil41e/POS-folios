@@ -1,6 +1,6 @@
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
-import { ALL_PERMISSION_KEYS } from '../../src/permissions.ts';
+import { ALL_PERMISSION_KEYS } from '../../shared/permissions.ts';
 import type {
   AuthUser,
   Category,
@@ -9,7 +9,7 @@ import type {
   OrganizationSettings,
   PermissionKey,
   Product,
-} from '../../src/types.ts';
+} from '../../shared/types.ts';
 
 // Vitest globals are off, so Testing Library cannot register its own cleanup.
 afterEach(() => {

@@ -93,6 +93,20 @@ describe('POST /api/invoices — checkout (characterization)', () => {
     expect(inv.card_amount).toBe(Number((inv.grand_total - 5).toFixed(2)));
   });
 
+  // R2.2: amounts use roundMoney (half away from zero). With toFixed the VAT on
+  // 0.10 at 15% (0.015) came out as 0.01; it is 0.02.
+  it('rounds VAT half up at the halala boundary', async () => {
+    const created = await request(t.app)
+      .post('/api/products')
+      .set(bearer(adminToken))
+      .send({ sku: 'ROUND-010', name_ar: 'صنف التقريب', sell_price: 0.1, cost_price: 0.05, stock_qty: 5 });
+    expect(created.status).toBe(201);
+    const res = await sell(adminToken, cashSale([{ product_id: created.body.product.id, qty: 1 }]));
+    expect(res.status).toBe(201);
+    expect(res.body.invoice).toMatchObject({ subtotal: 0.1, vat_total: 0.02, grand_total: 0.12, cash_amount: 0.12 });
+    expect(res.body.invoice.items[0]).toMatchObject({ line_subtotal: 0.1, line_vat: 0.02, line_total: 0.12 });
+  });
+
   it('forbids a discount for a user without pos.discount', async () => {
     const res = await sell(cashierToken, cashSale([{ product_id: SEED.milk.id, qty: 1 }], { discount_total: 1 }));
     expect(res.status).toBe(403);

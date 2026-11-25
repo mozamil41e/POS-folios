@@ -24,12 +24,13 @@ import type {
   OrganizationSettings,
   PaymentMethod,
   Product,
-} from '../types';
+} from '../../shared/types';
 import { formatDateTime, formatMoney, translations } from '../i18n';
-import { hasPermission } from '../permissions';
+import { hasPermission } from '../../shared/permissions';
 import { buildPublicInvoiceUrl } from './InvoiceReceiptModal';
-import { isValidVatNumber } from '../validation';
+import { isValidVatNumber } from '../../shared/validation';
 import { TablePagination, useTablePagination } from './TablePagination';
+import { roundMoney } from '../../shared/money';
 
 interface SalesViewProps {
   lang: Language;
@@ -203,22 +204,22 @@ export function SalesView({
       }
     }
 
-    const netSales = Number((grossSales - returnsTotal).toFixed(2));
-    const netVat = Number((grossVat - returnsVat).toFixed(2));
-    const grossProfit = Number((totalNetRevenueExVat - totalNetCogs).toFixed(2));
+    const netSales = roundMoney(grossSales - returnsTotal);
+    const netVat = roundMoney(grossVat - returnsVat);
+    const grossProfit = roundMoney(totalNetRevenueExVat - totalNetCogs);
     const profitMargin =
       totalNetRevenueExVat > 0 ? Number(((grossProfit / totalNetRevenueExVat) * 100).toFixed(1)) : 0;
 
     return {
       netSales,
-      grossSales: Number(grossSales.toFixed(2)),
-      returnsTotal: Number(returnsTotal.toFixed(2)),
+      grossSales: roundMoney(grossSales),
+      returnsTotal: roundMoney(returnsTotal),
       salesCount,
       returnsCount,
       grossProfit,
       profitMargin,
-      cashTotal: Math.max(0, Number(cashTotal.toFixed(2))),
-      cardTotal: Math.max(0, Number(cardTotal.toFixed(2))),
+      cashTotal: Math.max(0, roundMoney(cashTotal)),
+      cardTotal: Math.max(0, roundMoney(cardTotal)),
       netVat,
     };
   }, [invoices, productCostMap]);
@@ -310,7 +311,7 @@ export function SalesView({
 
     const topProducts = Array.from(productStats.values())
       .map((p) => {
-        const profit = Number((p.netRevenueExVat - p.netCogs).toFixed(2));
+        const profit = roundMoney(p.netRevenueExVat - p.netCogs);
         const margin =
           p.netRevenueExVat > 0 ? Number(((profit / p.netRevenueExVat) * 100).toFixed(1)) : 0;
         return { ...p, profit, margin };
@@ -377,10 +378,10 @@ export function SalesView({
     const rawCogs = draftLines.reduce((s, l) => s + l.qty * l.cost_price, 0);
     const disc = Math.min(Math.max(0, Number(saleDiscount) || 0), rawSub);
     const ratio = rawSub > 0 ? (rawSub - disc) / rawSub : 1;
-    const subtotal = Number((rawSub - disc).toFixed(2));
-    const vat = Number((rawVat * ratio).toFixed(2));
-    const grandTotal = Number((subtotal + vat).toFixed(2));
-    const estProfit = Number((subtotal - rawCogs).toFixed(2));
+    const subtotal = roundMoney(rawSub - disc);
+    const vat = roundMoney(rawVat * ratio);
+    const grandTotal = roundMoney(subtotal + vat);
+    const estProfit = roundMoney(subtotal - rawCogs);
     return { subtotal, vat, grandTotal, estProfit };
   }, [draftLines, saleDiscount]);
 
