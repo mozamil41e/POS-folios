@@ -9,8 +9,6 @@ import type {
   OrganizationSettings,
   PermissionKey,
   Product,
-  Purchase,
-  PurchaseItem,
   StockMovement,
   Voucher,
 } from '../../shared/types.ts';
@@ -500,17 +498,6 @@ export function getAllProducts(): Product[] {
   return db
     .prepare('SELECT * FROM products WHERE active = 1 ORDER BY id ASC')
     .all() as Product[];
-}
-
-export function getAllPurchases(): Purchase[] {
-  const purchases = db
-    .prepare('SELECT * FROM purchases ORDER BY id DESC LIMIT 100')
-    .all() as Purchase[];
-  const itemsStmt = db.prepare('SELECT * FROM purchase_items WHERE purchase_id = ?');
-  return purchases.map((p) => ({
-    ...p,
-    items: itemsStmt.all(p.id) as PurchaseItem[],
-  }));
 }
 
 export function getRecentMovements(limit = 50): StockMovement[] {

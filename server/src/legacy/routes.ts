@@ -4,7 +4,8 @@
  * instead of the app.
  * Strangler: R2.4 moves each domain out into server/src/modules/<domain>:
  * products/inventory (R2.4a), then auth (R2.4b: setup, sign-in, sessions),
- * users/roles and settings (R2.4b); delete this file when empty.
+ * users/roles, settings, customers, suppliers and purchases (R2.4b);
+ * delete this file when empty.
  */
 import crypto from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
@@ -13,7 +14,6 @@ import {
   getAllCategories,
   getAllInvoices,
   getAllProducts,
-  getAllPurchases,
   getAllVouchers,
   getHeldCarts,
   getOrganizationSettings,
@@ -25,6 +25,7 @@ import { scopeForUser } from '../../../src/server/visibility.ts';
 import { isValidVatNumber } from '../../../shared/validation.ts';
 import { nextDocumentNumber } from '../../../src/server/sequences.ts';
 import { lists as customersLists } from '../modules/customers/service.ts';
+import { lists as purchasesLists } from '../modules/purchases/service.ts';
 import { getSettings } from '../modules/settings/service.ts';
 import { lists as suppliersLists } from '../modules/suppliers/service.ts';
 import { lists as usersLists } from '../modules/users/service.ts';
@@ -40,9 +41,6 @@ import type {
   InvoiceTypeCode,
   PaymentMethod,
   Product,
-  Purchase,
-  PurchasePaymentStatus,
-  Supplier,
   VoucherChannel,
   VoucherType,
 } from '../../../shared/types.ts';
@@ -98,7 +96,7 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
         categories: can('categories') ? getAllCategories() : undefined,
         customers: can('customers') ? await customersLists.customers() : undefined,
         suppliers: can('suppliers') ? await suppliersLists.suppliers() : undefined,
-        purchases: can('purchases') ? getAllPurchases() : undefined,
+        purchases: can('purchases') ? await purchasesLists.purchases() : undefined,
         invoices: can('invoices') ? getAllInvoices() : undefined,
         movements: can('movements') ? getRecentMovements(80) : undefined,
         heldCarts: can('heldCarts') ? getHeldCarts() : undefined,
@@ -209,210 +207,6 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
   });
 
   // Products, stock movements and categories moved to server/src/modules/inventory (R2.4a).
-
-  // Purchases (suppliers moved to server/src/modules/suppliers, R2.4b)
-  const PURCHASE_ERROR_CODES: ReadonlySet<string> = new Set([
-    'SUPPLIER_NOT_FOUND',
-    'PRODUCT_NOT_FOUND',
-    'INVALID_PURCHASE_LINE',
-  ]);
-
-  router.post('/api/purchases', requirePermission('purchases.manage'), (req: Request, res: Response) => {
-    const b = req.body as Record<string, unknown>;
-    const supplierId = Number(b.supplier_id);
-    const supplierInvoiceNo = String(b.supplier_invoice_no ?? '').trim();
-    const paymentStatus: PurchasePaymentStatus =
-      b.payment_status === 'credit' || b.payment_status === 'partial'
-        ? (b.payment_status as PurchasePaymentStatus)
-        : 'paid';
-    const notes = String(b.notes ?? '').trim();
-    const rawItems = Array.isArray(b.items) ? (b.items as Array<Record<string, unknown>>) : [];
-
-    if (!supplierId || rawItems.length === 0) {
-      res.status(400).json({ error: 'Supplier and at least one line item are required.' });
-      return;
-    }
-
-    try {
-      const createPurchaseTx = db.transaction(() => {
-        const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(supplierId) as
-          | Supplier
-          | undefined;
-        if (!supplier) {
-          throw new Error('SUPPLIER_NOT_FOUND');
-        }
-
-        const now = new Date().toISOString();
-        // Atomic yearly number (R1.8) instead of COUNT(*)+1.
-        const purchaseNumber = nextDocumentNumber(db, 'PO');
-
-        let subtotal = 0;
-        let vatTotal = 0;
-        const preparedItems: Array<{
-          product: Product;
-          qty: number;
-          unitCost: number;
-          taxRate: number;
-          lineSub: number;
-          lineVat: number;
-          lineTotal: number;
-        }> = [];
-
-        for (const entry of rawItems) {
-          const productId = Number(entry.product_id);
-          const qty = Math.floor(Number(entry.qty ?? 0));
-          const unitCost = Number(entry.unit_cost ?? 0);
-          const taxRate = Number(entry.tax_rate ?? 15);
-          if (qty <= 0 || Number.isNaN(unitCost) || unitCost < 0) {
-            throw new Error('INVALID_PURCHASE_LINE');
-          }
-
-          const product = db
-            .prepare('SELECT * FROM products WHERE id = ? AND active = 1')
-            .get(productId) as Product | undefined;
-          if (!product) {
-            throw new Error('PRODUCT_NOT_FOUND');
-          }
-
-          const lineSub = roundMoney(qty * unitCost);
-          const lineVat = roundMoney(lineSub * (taxRate / 100));
-          const lineTotal = roundMoney(lineSub + lineVat);
-          subtotal += lineSub;
-          vatTotal += lineVat;
-
-          preparedItems.push({
-            product,
-            qty,
-            unitCost,
-            taxRate,
-            lineSub,
-            lineVat,
-            lineTotal,
-          });
-        }
-
-        subtotal = roundMoney(subtotal);
-        vatTotal = roundMoney(vatTotal);
-        const grandTotal = roundMoney(subtotal + vatTotal);
-        const paidAmount =
-          paymentStatus === 'paid'
-            ? grandTotal
-            : paymentStatus === 'partial'
-            ? Math.min(grandTotal, Math.max(0, Number(b.paid_amount ?? 0)))
-            : 0;
-
-        const poInfo = db
-          .prepare(`
-            INSERT INTO purchases (
-              purchase_number, supplier_id, supplier_name, supplier_vat, supplier_invoice_no,
-              payment_status, paid_amount, subtotal, vat_total, grand_total, notes, received_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `)
-          .run(
-            purchaseNumber,
-            supplier.id,
-            supplier.name_ar,
-            supplier.vat_number,
-            supplierInvoiceNo,
-            paymentStatus,
-            paidAmount,
-            subtotal,
-            vatTotal,
-            grandTotal,
-            notes,
-            now,
-            now
-          );
-
-        const insertItemStmt = db.prepare(`
-          INSERT INTO purchase_items (
-            purchase_id, product_id, sku, name_ar, name_en, qty, unit_cost, tax_rate,
-            line_subtotal, line_vat, line_total
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        for (const item of preparedItems) {
-          insertItemStmt.run(
-            poInfo.lastInsertRowid,
-            item.product.id,
-            item.product.sku,
-            item.product.name_ar,
-            item.product.name_en,
-            item.qty,
-            item.unitCost,
-            item.taxRate,
-            item.lineSub,
-            item.lineVat,
-            item.lineTotal
-          );
-
-          const newStock = item.product.stock_qty + item.qty;
-          db.prepare(
-            'UPDATE products SET stock_qty = ?, cost_price = ?, updated_at = ? WHERE id = ?'
-          ).run(newStock, item.unitCost, now, item.product.id);
-
-          db.prepare(`
-            INSERT INTO stock_movements (product_id, type, qty_delta, balance_after, reference_no, notes, created_at)
-            VALUES (?, 'purchase', ?, ?, ?, ?, ?)
-          `).run(
-            item.product.id,
-            item.qty,
-            newStock,
-            purchaseNumber,
-            `فاتورة مشتريات من ${supplier.name_ar}`,
-            now
-          );
-        }
-
-        return Number(poInfo.lastInsertRowid);
-      });
-
-      const purchaseId = createPurchaseTx();
-      const purchases = getAllPurchases();
-      sendScoped(res.status(201), {
-        purchase: purchases.find((p) => p.id === purchaseId),
-        purchases,
-        products: getAllProducts(),
-        movements: getRecentMovements(80),
-      });
-    } catch (err) {
-      const code = knownErrorCode(err, PURCHASE_ERROR_CODES);
-      if (code) {
-        res.status(400).json({ error: code, code });
-        return;
-      }
-      throw err; // unexpected: central error handler answers 500 without internal details
-    }
-  });
-
-  router.post('/api/purchases/:id/pay', requirePermission('purchases.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const purchase = db.prepare('SELECT * FROM purchases WHERE id = ?').get(id) as
-      | Purchase
-      | undefined;
-    if (!purchase) {
-      res.status(404).json({ error: 'Purchase invoice not found.' });
-      return;
-    }
-
-    const amount = Number((req.body as Record<string, unknown>).amount ?? 0);
-    if (Number.isNaN(amount) || amount <= 0) {
-      res.status(400).json({ error: 'Positive payment amount is required.' });
-      return;
-    }
-
-    const nextPaid = Math.min(purchase.grand_total, roundMoney(purchase.paid_amount + amount));
-    const nextStatus: PurchasePaymentStatus =
-      nextPaid >= purchase.grand_total - 0.01 ? 'paid' : 'partial';
-
-    db.prepare('UPDATE purchases SET paid_amount = ?, payment_status = ? WHERE id = ?').run(
-      nextPaid,
-      nextStatus,
-      id
-    );
-
-    sendScoped(res, { purchases: getAllPurchases() });
-  });
 
   // Held carts
   router.post('/api/carts/hold', requirePermission('pos.hold'), (req: Request, res: Response) => {

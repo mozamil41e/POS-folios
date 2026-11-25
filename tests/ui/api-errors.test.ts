@@ -69,6 +69,18 @@ describe('describeApiError (R1.10)', () => {
     expect(describeApiError({ code: 'SUPPLIER_NOT_FOUND' }, 'en')).toBe('Supplier not found');
   });
 
+  it('explains purchase errors with the line number (R2.4b)', () => {
+    expect(describeApiError({ code: 'INVALID_PURCHASE_LINE', line: 2, field: 'qty', reason: 'NOT_INTEGER' }, 'ar')).toBe(
+      'البند 2 - الكمية: يجب أن يكون عدداً صحيحاً'
+    );
+    expect(describeApiError({ code: 'INVALID_PURCHASE_LINE', line: 1, field: 'tax_rate', reason: 'INVALID_TAX' }, 'en')).toBe(
+      'Line 1: VAT rate must be 15% (S) or 0% (Z or E)'
+    );
+    expect(describeApiError({ code: 'PRODUCT_NOT_FOUND', line: 3 }, 'ar')).toBe('البند 3: الصنف غير موجود أو موقوف');
+    expect(describeApiError({ code: 'PRODUCT_NOT_FOUND' }, 'en')).toBe('The product does not exist or is inactive');
+    expect(describeApiError({ code: 'PURCHASE_NOT_FOUND' }, 'ar')).toBe('فاتورة الشراء غير موجودة');
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

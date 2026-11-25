@@ -1,3 +1,4 @@
+import { MOVEMENT_TYPES } from '../../../../shared/constants.ts';
 import type { Category, Product } from '../../../../shared/types.ts';
 import {
   parseCategory,
@@ -151,6 +152,48 @@ export async function recordMovement(raw: Raw): Promise<void> {
       created_at: timestamp(),
     });
   });
+}
+
+// ------------------------------------------- stock received (other modules)
+
+/** An active product, for modules that sell or buy it (purchases, R2.4b). */
+export const findActiveProduct = (q: repo.Executor, id: number) => repo.products.findActiveById(q, id);
+
+export interface ReceivedLine {
+  product_id: number;
+  qty: number;
+  unit_cost: number;
+}
+
+/**
+ * Stock bought from a supplier (R2.4b, purchases): adds each line to the
+ * balance, makes its cost the product's cost price (moving average comes in
+ * R5) and writes one 'purchase' movement per line. The balance is read again
+ * for every line, so a product listed twice adds up (the legacy route lost
+ * the first line). Pass the purchase's transaction.
+ */
+export async function receiveStock(
+  trx: repo.Executor,
+  lines: readonly ReceivedLine[],
+  referenceNo: string,
+  notes: string,
+  at: string
+): Promise<void> {
+  for (const line of lines) {
+    const product = await repo.products.findById(trx, line.product_id);
+    if (!product) throw productNotFound();
+    const balance = product.stock_qty + line.qty;
+    await repo.products.update(trx, product.id, { stock_qty: balance, cost_price: line.unit_cost, updated_at: at });
+    await repo.movements.insert(trx, {
+      product_id: product.id,
+      type: MOVEMENT_TYPES.PURCHASE,
+      qty_delta: line.qty,
+      balance_after: balance,
+      reference_no: referenceNo,
+      notes,
+      created_at: at,
+    });
+  }
 }
 
 // --------------------------------------------------------------- categories

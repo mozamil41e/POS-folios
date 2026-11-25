@@ -14,6 +14,8 @@ export interface ApiErrorBody {
   available?: number;
   /** Products still in a category that cannot be deleted. */
   count?: number;
+  /** The 1-based line of a purchase with a problem (R2.4b). */
+  line?: number;
 }
 
 type Bilingual = { ar: string; en: string };
@@ -55,6 +57,13 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   reference_no: { ar: 'رقم المرجع', en: 'Reference' },
   category_id: { ar: 'التصنيف', en: 'Category' },
   ids: { ar: 'ترتيب التصنيفات', en: 'Category order' },
+  supplier_id: { ar: 'المورد', en: 'Supplier' },
+  items: { ar: 'بنود الفاتورة', en: 'Invoice lines' },
+  payment_status: { ar: 'حالة الدفع', en: 'Payment status' },
+  paid_amount: { ar: 'المبلغ المدفوع', en: 'Amount paid' },
+  amount: { ar: 'المبلغ', en: 'Amount' },
+  product_id: { ar: 'الصنف', en: 'Product' },
+  unit_cost: { ar: 'سعر الوحدة', en: 'Unit cost' },
 };
 
 const REASONS: Record<string, Bilingual> = {
@@ -114,6 +123,22 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
         ? 'الملف فيه أخطاء، لم يُستورد أي صنف. راجع المعاينة وصحّح الملف'
         : 'The file has problems; nothing was imported. Check the preview and fix the file';
     // Customers and suppliers (R2.4b); CUSTOMER_NOT_FOUND also comes from the checkout.
+    // Purchases (R2.4b): the line number and the field of the problem.
+    case 'INVALID_PURCHASE_LINE': {
+      const label = body.field ? FIELD_LABELS[body.field] : undefined;
+      const reason = body.reason ? REASONS[body.reason] : undefined;
+      if (typeof body.line !== 'number' || !label || !reason) return null;
+      return isAr ? `البند ${body.line} - ${label.ar}: ${reason.ar}` : `Line ${body.line}: ${label.en} ${reason.en}`;
+    }
+    case 'PRODUCT_NOT_FOUND':
+      if (typeof body.line === 'number') {
+        return isAr
+          ? `البند ${body.line}: الصنف غير موجود أو موقوف`
+          : `Line ${body.line}: the product does not exist or is inactive`;
+      }
+      return isAr ? 'الصنف غير موجود أو موقوف' : 'The product does not exist or is inactive';
+    case 'PURCHASE_NOT_FOUND':
+      return isAr ? 'فاتورة الشراء غير موجودة' : 'Purchase invoice not found';
     case 'CUSTOMER_NOT_FOUND':
       return isAr ? 'العميل غير موجود' : 'Customer not found';
     case 'SUPPLIER_NOT_FOUND':

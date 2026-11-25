@@ -6,6 +6,7 @@ import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { createLegacyRouter } from './legacy/routes.ts';
 import { createAuthRouter } from './modules/auth/routes.ts';
 import { createCustomersRouter } from './modules/customers/routes.ts';
+import { createPurchasesRouter } from './modules/purchases/routes.ts';
 import { createSettingsRouter } from './modules/settings/routes.ts';
 import { createSuppliersRouter } from './modules/suppliers/routes.ts';
 import { createUsersRouter } from './modules/users/routes.ts';
@@ -93,6 +94,7 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(createSettingsRouter());
   app.use(createCustomersRouter());
   app.use(createSuppliersRouter());
+  app.use(createPurchasesRouter());
   app.use(createInventoryRouter());
   // The routes not moved yet, as they were; R2.4b empties this router.
   app.use(createLegacyRouter({ limiters }));
