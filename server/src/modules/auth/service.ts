@@ -4,9 +4,9 @@ import {
   parseLoginInput,
   parseSetupInput,
 } from '../../../../shared/schemas/auth.ts';
-import type { Raw } from '../../../../shared/schemas/common.ts';
+import type { Parsed, Raw } from '../../../../shared/schemas/common.ts';
 import type { AuthUser } from '../../../../shared/types.ts';
-import { kysely } from '../../db/kysely.ts';
+import { kysely, type Executor } from '../../db/kysely.ts';
 import { withTransaction } from '../../db/transaction.ts';
 import {
   AppError,
@@ -71,13 +71,7 @@ export async function setupFirstAdmin(raw: Raw, setupToken: string | undefined):
     throw new ForbiddenError('INVALID_SETUP_TOKEN', 'Invalid setup token.');
   }
 
-  const parsed = parseSetupInput(raw);
-  if (!parsed.ok) {
-    const first = parsed.problems[0];
-    if (first.field === 'password') throw passwordLength();
-    throw new ValidationError(first.field, first.reason, first.message);
-  }
-  const input = parsed.value;
+  const input = accountInputOrThrow(parseSetupInput(raw));
   const passwordHash = await hashPassword(input.password);
 
   return withTransaction(async (trx) => {
@@ -142,13 +136,28 @@ export async function userForSession(token: string): Promise<AuthUser | null> {
   return userId === undefined ? null : repo.users.authUserById(kysely, userId);
 }
 
-// -------------------------------------------- used by the users routes (legacy)
+// ------------------------- used by the users module and scripts/create-admin.ts
+// Each takes the executor last, so a caller can pass its transaction (`trx`).
 
 export { hashPassword };
 
-export const resolveAuthUserById = (userId: number) => repo.users.authUserById(kysely, userId);
+/**
+ * The first problem of an account form: a password problem keeps its own code
+ * PASSWORD_TOO_SHORT (R1.9, the UI knows it); others are VALIDATION_FAILED.
+ */
+export function accountInputOrThrow<T>(parsed: Parsed<T>): T {
+  if (parsed.ok) return parsed.value;
+  const first = parsed.problems[0];
+  if (first.field === 'password') throw passwordLength();
+  throw new ValidationError(first.field, first.reason, first.message);
+}
 
-export const revokeAllSessionsForUser = (userId: number) => repo.sessions.revokeAllForUser(kysely, userId);
+export const resolveAuthUserById = (userId: number, q: Executor = kysely) => repo.users.authUserById(q, userId);
+
+/** On password change, deactivation, deletion and emergency recovery. */
+export const revokeAllSessionsForUser = (userId: number, q: Executor = kysely) =>
+  repo.sessions.revokeAllForUser(q, userId);
 
 /** An administrator setting a new password also lifts a lockout (R1.9). */
-export const clearLoginFailures = (...emails: string[]) => lockout.clearFailures(kysely, ...emails);
+export const clearLoginFailures = (emails: readonly string[], q: Executor = kysely) =>
+  lockout.clearFailures(q, ...emails);

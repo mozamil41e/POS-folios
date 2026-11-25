@@ -7,18 +7,16 @@ import type {
   HeldCart,
   Invoice,
   InvoiceItem,
-  ManagedUser,
   OrganizationSettings,
   PermissionKey,
   Product,
   Purchase,
   PurchaseItem,
-  RoleRecord,
   StockMovement,
   Supplier,
   Voucher,
 } from '../../shared/types.ts';
-import { ALL_PERMISSION_KEYS, sanitizePermissions } from '../../shared/permissions.ts';
+import { ALL_PERMISSION_KEYS } from '../../shared/permissions.ts';
 import { syncDocumentSequences } from './sequences.ts';
 
 // MIZAN_DB_PATH lets automated tests use an isolated temporary database.
@@ -800,129 +798,4 @@ function seedAndMigrateRolesAndUsers(): void {
       db.prepare('UPDATE users SET role_id = ? WHERE id = ?').run(resolvedId, u.id);
     }
   }
-}
-
-interface RawRoleRow {
-  id: number;
-  slug: string;
-  name_ar: string;
-  name_en: string;
-  description_ar: string;
-  description_en: string;
-  permissions_json: string;
-  is_system: number;
-  users_count?: number;
-  created_at: string;
-}
-
-function mapRoleRow(row: RawRoleRow): RoleRecord {
-  let parsed: unknown = [];
-  try {
-    parsed = JSON.parse(row.permissions_json);
-  } catch {
-    parsed = [];
-  }
-  return {
-    id: row.id,
-    slug: row.slug,
-    name_ar: row.name_ar,
-    name_en: row.name_en,
-    description_ar: row.description_ar,
-    description_en: row.description_en,
-    permissions:
-      row.slug === 'admin' ? [...ALL_PERMISSION_KEYS] : sanitizePermissions(parsed),
-    is_system: row.is_system,
-    users_count: row.users_count ?? 0,
-    created_at: row.created_at,
-  };
-}
-
-export function getAllRoles(): RoleRecord[] {
-  const rows = db
-    .prepare(`
-      SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) as users_count
-      FROM roles r
-      ORDER BY r.is_system DESC, r.id ASC
-    `)
-    .all() as RawRoleRow[];
-  return rows.map(mapRoleRow);
-}
-
-export function getRoleById(id: number): RoleRecord | null {
-  const row = db
-    .prepare(`
-      SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) as users_count
-      FROM roles r
-      WHERE r.id = ?
-    `)
-    .get(id) as RawRoleRow | undefined;
-  return row ? mapRoleRow(row) : null;
-}
-
-export function getRoleBySlug(slug: string): RoleRecord | null {
-  const row = db
-    .prepare(`
-      SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) as users_count
-      FROM roles r
-      WHERE r.slug = ?
-    `)
-    .get(slug) as RawRoleRow | undefined;
-  return row ? mapRoleRow(row) : null;
-}
-
-export function getAllUsers(): ManagedUser[] {
-  const rows = db
-    .prepare(`
-      SELECT u.id, u.full_name, u.email, u.phone, u.role, u.role_id,
-             u.is_active, u.last_login_at, u.created_at,
-             COALESCE(r.name_ar, u.role) as role_name_ar,
-             COALESCE(r.name_en, u.role) as role_name_en,
-             COALESCE(r.permissions_json, '[]') as permissions_json,
-             COALESCE(r.slug, u.role) as role_slug
-      FROM users u
-      LEFT JOIN roles r ON r.id = u.role_id
-      ORDER BY u.id ASC
-    `)
-    .all() as Array<{
-    id: number;
-    full_name: string;
-    email: string;
-    phone: string;
-    role: string;
-    role_id: number | null;
-    is_active: number;
-    last_login_at: string | null;
-    created_at: string;
-    role_name_ar: string;
-    role_name_en: string;
-    permissions_json: string;
-    role_slug: string;
-  }>;
-
-  return rows.map((row) => {
-    let permsCount = 0;
-    if (row.role_slug === 'admin') {
-      permsCount = ALL_PERMISSION_KEYS.length;
-    } else {
-      try {
-        permsCount = sanitizePermissions(JSON.parse(row.permissions_json)).length;
-      } catch {
-        permsCount = 0;
-      }
-    }
-    return {
-      id: row.id,
-      full_name: row.full_name,
-      email: row.email,
-      phone: row.phone ?? '',
-      role: row.role_slug,
-      role_id: row.role_id ?? 0,
-      role_name_ar: row.role_name_ar,
-      role_name_en: row.role_name_en,
-      permissions_count: permsCount,
-      is_active: row.is_active ?? 1,
-      last_login_at: row.last_login_at ?? null,
-      created_at: row.created_at,
-    };
-  });
 }

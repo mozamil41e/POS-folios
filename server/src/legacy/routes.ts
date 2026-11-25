@@ -3,8 +3,8 @@
  * here unchanged except for: Express 5 (no asyncHandler wrapper), the router
  * instead of the app.
  * Strangler: R2.4 moves each domain out into server/src/modules/<domain>:
- * products/inventory (R2.4a), then auth (R2.4b: setup, sign-in, sessions);
- * delete this file when empty.
+ * products/inventory (R2.4a), then auth (R2.4b: setup, sign-in, sessions)
+ * and users/roles (R2.4b); delete this file when empty.
  */
 import crypto from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
@@ -15,32 +15,18 @@ import {
   getAllInvoices,
   getAllProducts,
   getAllPurchases,
-  getAllRoles,
   getAllSuppliers,
-  getAllUsers,
   getAllVouchers,
   getHeldCarts,
   getOrganizationSettings,
   getPublicInvoiceByUuid,
   getRecentMovements,
-  getRoleById,
 } from '../../../src/server/db.ts';
-import {
-  ALL_PERMISSION_KEYS,
-  canViewData,
-  sanitizePermissions,
-  type VisibleDataKey,
-} from '../../../shared/permissions.ts';
+import { canViewData, type VisibleDataKey } from '../../../shared/permissions.ts';
 import { scopeForUser } from '../../../src/server/visibility.ts';
-import { isValidPasswordLength, isValidVatNumber } from '../../../shared/validation.ts';
+import { isValidVatNumber } from '../../../shared/validation.ts';
 import { nextDocumentNumber } from '../../../src/server/sequences.ts';
-import {
-  clearLoginFailures,
-  hashPassword,
-  resolveAuthUserById,
-  revokeAllSessionsForUser,
-} from '../modules/auth/service.ts';
-import { PASSWORD_LENGTH_ERROR } from '../../../shared/schemas/auth.ts';
+import { lists as usersLists } from '../modules/users/service.ts';
 import {
   parseCustomerInput,
   parseSupplierInput,
@@ -106,7 +92,7 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
   router.use('/api', requireAuth());
 
   // Bootstrap the workspace — only the data this user may read (R1.3).
-  router.get('/api/bootstrap', (_req: Request, res: Response) => {
+  router.get('/api/bootstrap', async (_req: Request, res: Response) => {
     const authUser = res.locals.authUser as AuthUser;
     const can = (key: VisibleDataKey) => canViewData(authUser, key);
     const canManageUsers = authUser.permissions.includes('users.manage');
@@ -122,320 +108,9 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
         movements: can('movements') ? getRecentMovements(80) : undefined,
         heldCarts: can('heldCarts') ? getHeldCarts() : undefined,
         vouchers: can('vouchers') ? getAllVouchers() : undefined,
-        ...(canManageUsers ? { users: getAllUsers(), roles: getAllRoles() } : {}),
+        ...(canManageUsers ? { users: await usersLists.users(), roles: await usersLists.roles() } : {}),
       })
     );
-  });
-
-  // Users & Roles Management (RBAC)
-  router.get('/api/users', requirePermission('users.manage'), (_req: Request, res: Response) => {
-    res.json({
-      users: getAllUsers(),
-      roles: getAllRoles(),
-    });
-  });
-
-  router.post('/api/users', requirePermission('users.manage'), async (req: Request, res: Response) => {
-    const b = req.body as Record<string, unknown>;
-    const fullName = String(b.full_name ?? '').trim();
-    const email = String(b.email ?? '').trim().toLowerCase();
-    const phone = String(b.phone ?? '').trim().slice(0, 30);
-    const password = typeof b.password === 'string' ? b.password : '';
-    const roleId = Number(b.role_id ?? 0);
-    const isActive = b.is_active === false || b.is_active === 0 ? 0 : 1;
-
-    if (fullName.length < 2 || fullName.length > 100) {
-      res.status(400).json({ error: 'Full name must be between 2 and 100 characters.' });
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
-      res.status(400).json({ error: 'Valid email address is required.' });
-      return;
-    }
-    if (!isValidPasswordLength(password)) {
-      res.status(400).json({ error: PASSWORD_LENGTH_ERROR, code: 'PASSWORD_TOO_SHORT' });
-      return;
-    }
-
-    const targetRole = getRoleById(roleId);
-    if (!targetRole) {
-      res.status(400).json({ error: 'Selected role does not exist.' });
-      return;
-    }
-
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-    if (existing) {
-      res.status(409).json({ error: 'An account with this email already exists.' });
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const passwordHash = await hashPassword(password);
-    // Re-checked after the await: another request may have used the email meanwhile.
-    if (db.prepare('SELECT id FROM users WHERE email = ?').get(email)) {
-      res.status(409).json({ error: 'An account with this email already exists.' });
-      return;
-    }
-    const info = db
-      .prepare(`
-        INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(fullName, email, phone, passwordHash, targetRole.slug, targetRole.id, isActive, now);
-    // Failures recorded before the account existed must not carry over.
-    await clearLoginFailures(email);
-
-    res.status(201).json({
-      userId: Number(info.lastInsertRowid),
-      users: getAllUsers(),
-      roles: getAllRoles(),
-    });
-  });
-
-  router.put('/api/users/:id', requirePermission('users.manage'), async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const authUser = res.locals.authUser as AuthUser;
-    const existing = db
-      .prepare('SELECT id, email, role, role_id, is_active FROM users WHERE id = ?')
-      .get(id) as
-      | { id: number; email: string; role: string; role_id: number | null; is_active: number }
-      | undefined;
-
-    if (!existing) {
-      res.status(404).json({ error: 'User not found.' });
-      return;
-    }
-
-    const b = req.body as Record<string, unknown>;
-    const fullName = String(b.full_name ?? '').trim();
-    const email = String(b.email ?? existing.email).trim().toLowerCase();
-    const phone = String(b.phone ?? '').trim().slice(0, 30);
-    const password = typeof b.password === 'string' ? b.password : '';
-    const roleId = Number(b.role_id ?? existing.role_id ?? 0);
-    const nextActive =
-      b.is_active === undefined ? existing.is_active : b.is_active === false || b.is_active === 0 ? 0 : 1;
-
-    if (fullName.length < 2 || fullName.length > 100) {
-      res.status(400).json({ error: 'Full name must be between 2 and 100 characters.' });
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
-      res.status(400).json({ error: 'Valid email address is required.' });
-      return;
-    }
-    if (password && !isValidPasswordLength(password)) {
-      res.status(400).json({ error: PASSWORD_LENGTH_ERROR, code: 'PASSWORD_TOO_SHORT' });
-      return;
-    }
-
-    const targetRole = getRoleById(roleId);
-    if (!targetRole) {
-      res.status(400).json({ error: 'Selected role does not exist.' });
-      return;
-    }
-
-    const dupEmail = db
-      .prepare('SELECT id FROM users WHERE email = ? AND id != ?')
-      .get(email, id);
-    if (dupEmail) {
-      res.status(409).json({ error: 'Another account already uses this email.' });
-      return;
-    }
-
-    // Safeguard: cannot deactivate self or remove the last active admin
-    if (id === authUser.id && nextActive === 0) {
-      res.status(400).json({ error: 'You cannot deactivate your own active account.' });
-      return;
-    }
-
-    const existingRole = existing.role_id ? getRoleById(existing.role_id) : null;
-    const wasManagerAdmin =
-      existingRole?.permissions.includes('users.manage') || existing.role === 'admin';
-    const willKeepManagerAdmin = targetRole.permissions.includes('users.manage') && nextActive === 1;
-
-    if (wasManagerAdmin && !willKeepManagerAdmin) {
-      const adminManagers = db
-        .prepare(`
-          SELECT u.id, COALESCE(r.permissions_json, '[]') as permissions_json, u.role
-          FROM users u
-          LEFT JOIN roles r ON r.id = u.role_id
-          WHERE u.is_active = 1 AND u.id != ?
-        `)
-        .all(id) as Array<{ id: number; permissions_json: string; role: string }>;
-
-      const anotherAdminExists = adminManagers.some((u) => {
-        if (u.role === 'admin') return true;
-        try {
-          return sanitizePermissions(JSON.parse(u.permissions_json)).includes('users.manage');
-        } catch {
-          return false;
-        }
-      });
-
-      if (!anotherAdminExists) {
-        res.status(400).json({
-          error: 'Cannot demote or deactivate the last active user administrator.',
-        });
-        return;
-      }
-    }
-
-    // Hashed before any write, so a failure cannot leave a half-updated user.
-    const newPasswordHash = password ? await hashPassword(password) : null;
-
-    db.transaction(() => {
-      db.prepare(`
-        UPDATE users
-        SET full_name = ?, email = ?, phone = ?, role = ?, role_id = ?, is_active = ?
-        WHERE id = ?
-      `).run(fullName, email, phone, targetRole.slug, targetRole.id, nextActive, id);
-
-      if (newPasswordHash) {
-        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newPasswordHash, id);
-      }
-    })();
-
-    // R2.4b: the lockout and sessions belong to the auth module (Kysely, same
-    // connection). These awaits run only database work, so no other request
-    // can come in between the update and the revocation.
-    if (newPasswordHash) {
-      // An administrator setting a new password also lifts a lockout (R1.9).
-      await clearLoginFailures(existing.email, email);
-    }
-    if (nextActive === 0 || password) {
-      await revokeAllSessionsForUser(id);
-    }
-
-    res.json({
-      users: getAllUsers(),
-      roles: getAllRoles(),
-      currentUser: id === authUser.id ? await resolveAuthUserById(authUser.id) : undefined,
-    });
-  });
-
-  router.delete('/api/users/:id', requirePermission('users.manage'), async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const authUser = res.locals.authUser as AuthUser;
-    if (id === authUser.id) {
-      res.status(400).json({ error: 'You cannot delete your own account.' });
-      return;
-    }
-
-    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
-    if (!existing) {
-      res.status(404).json({ error: 'User not found.' });
-      return;
-    }
-
-    await revokeAllSessionsForUser(id);
-    db.prepare('DELETE FROM users WHERE id = ?').run(id);
-
-    res.json({
-      users: getAllUsers(),
-      roles: getAllRoles(),
-    });
-  });
-
-  router.get('/api/roles', requirePermission('users.manage'), (_req: Request, res: Response) => {
-    res.json({ roles: getAllRoles() });
-  });
-
-  router.post('/api/roles', requirePermission('users.manage'), (req: Request, res: Response) => {
-    const b = req.body as Record<string, unknown>;
-    const nameAr = String(b.name_ar ?? '').trim();
-    const nameEn = String(b.name_en ?? '').trim() || nameAr;
-    const descAr = String(b.description_ar ?? '').trim();
-    const descEn = String(b.description_en ?? '').trim() || descAr;
-    const permissions = sanitizePermissions(b.permissions);
-
-    if (nameAr.length < 2 || nameAr.length > 60) {
-      res.status(400).json({ error: 'Role name must be between 2 and 60 characters.' });
-      return;
-    }
-
-    const baseSlug = nameEn
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '') || 'custom_role';
-    const slug = `${baseSlug}_${crypto.randomBytes(2).toString('hex')}`;
-    const now = new Date().toISOString();
-
-    const info = db
-      .prepare(`
-        INSERT INTO roles (
-          slug, name_ar, name_en, description_ar, description_en,
-          permissions_json, is_system, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-      `)
-      .run(slug, nameAr, nameEn, descAr, descEn, JSON.stringify(permissions), now);
-
-    res.status(201).json({
-      role: getRoleById(Number(info.lastInsertRowid)),
-      roles: getAllRoles(),
-    });
-  });
-
-  router.put('/api/roles/:id', requirePermission('users.manage'), async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const authUser = res.locals.authUser as AuthUser;
-    const role = getRoleById(id);
-    if (!role) {
-      res.status(404).json({ error: 'Role not found.' });
-      return;
-    }
-
-    const b = req.body as Record<string, unknown>;
-    const nameAr = String(b.name_ar ?? role.name_ar).trim();
-    const nameEn = String(b.name_en ?? role.name_en).trim() || nameAr;
-    const descAr = String(b.description_ar ?? role.description_ar).trim();
-    const descEn = String(b.description_en ?? role.description_en).trim();
-
-    if (nameAr.length < 2 || nameAr.length > 60) {
-      res.status(400).json({ error: 'Role name must be between 2 and 60 characters.' });
-      return;
-    }
-
-    const nextPermissions =
-      role.slug === 'admin'
-        ? [...ALL_PERMISSION_KEYS]
-        : b.permissions === undefined
-        ? role.permissions
-        : sanitizePermissions(b.permissions);
-
-    db.prepare(`
-      UPDATE roles
-      SET name_ar = ?, name_en = ?, description_ar = ?, description_en = ?, permissions_json = ?
-      WHERE id = ?
-    `).run(nameAr, nameEn, descAr, descEn, JSON.stringify(nextPermissions), id);
-
-    res.json({
-      role: getRoleById(id),
-      roles: getAllRoles(),
-      users: getAllUsers(),
-      currentUser: await resolveAuthUserById(authUser.id),
-    });
-  });
-
-  router.delete('/api/roles/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const role = getRoleById(id);
-    if (!role) {
-      res.status(404).json({ error: 'Role not found.' });
-      return;
-    }
-    if (role.is_system === 1 || role.slug === 'admin') {
-      res.status(400).json({ error: 'System administrator role cannot be deleted.' });
-      return;
-    }
-    if ((role.users_count ?? 0) > 0) {
-      res.status(400).json({
-        error: 'Reassign users from this role before deleting it.',
-      });
-      return;
-    }
-
-    db.prepare('DELETE FROM roles WHERE id = ?').run(id);
-    res.json({ roles: getAllRoles() });
   });
 
   router.post('/api/vouchers', requirePermission('vouchers.manage'), (req: Request, res: Response) => {

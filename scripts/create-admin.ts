@@ -8,9 +8,14 @@
 //   Bash:        ADMIN_EMAIL=owner@example.com ADMIN_NAME=Owner ADMIN_PASSWORD='...' npm run admin:create
 //
 // It uses the same database as the server: MIZAN_DB_PATH, or ./data/mizan-pos.db.
-import { db, getRoleBySlug, initDatabase } from '../src/server/db.ts';
-import { hashPassword } from '../server/src/modules/auth/passwords.ts';
-import { clearLoginFailures, revokeAllSessionsForUser } from '../server/src/modules/auth/service.ts';
+// Since R2.4b it goes through the auth and users modules (no SQL here).
+import { db, initDatabase } from '../src/server/db.ts';
+import { kysely } from '../server/src/db/kysely.ts';
+import { withTransaction } from '../server/src/db/transaction.ts';
+import { clearLoginFailures, hashPassword, revokeAllSessionsForUser } from '../server/src/modules/auth/service.ts';
+import * as users from '../server/src/modules/users/repository.ts';
+import { EMAIL_PATTERN, FULL_NAME_MAX_LENGTH, FULL_NAME_MIN_LENGTH } from '../shared/schemas/auth.ts';
+import { INPUT_LIMITS } from '../shared/schemas/common.ts';
 import { isValidPasswordLength } from '../shared/validation.ts';
 
 function fail(message: string): never {
@@ -22,7 +27,7 @@ const email = (process.env.ADMIN_EMAIL ?? '').trim().toLowerCase();
 const fullName = (process.env.ADMIN_NAME ?? '').trim();
 const password = process.env.ADMIN_PASSWORD ?? '';
 
-if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
+if (!EMAIL_PATTERN.test(email) || email.length > INPUT_LIMITS.email) {
   fail('ADMIN_EMAIL must be a valid email address.');
 }
 if (!isValidPasswordLength(password)) {
@@ -32,35 +37,43 @@ if (!isValidPasswordLength(password)) {
 initDatabase();
 const passwordHash = await hashPassword(password);
 
-const adminRole = getRoleBySlug('admin');
+const adminRole = await users.roles.findBySlug(kysely, 'admin');
 if (!adminRole) {
   fail('The system administrator role is missing from the database.');
 }
 
-const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as
-  | { id: number }
-  | undefined;
+const existingId = await users.users.findIdByEmail(kysely, email);
 
-if (existing) {
-  db.prepare(
-    'UPDATE users SET password_hash = ?, role = ?, role_id = ?, is_active = 1 WHERE id = ?'
-  ).run(passwordHash, adminRole.slug, adminRole.id, existing.id);
-  await revokeAllSessionsForUser(existing.id);
-  await clearLoginFailures(email); // also lifts a sign-in lockout (R1.9)
+if (existingId !== undefined) {
+  await withTransaction(async (trx) => {
+    await users.users.restoreAdmin(trx, existingId, {
+      password_hash: passwordHash,
+      role: adminRole.slug,
+      role_id: adminRole.id,
+    });
+    await revokeAllSessionsForUser(existingId, trx);
+    await clearLoginFailures([email], trx); // also lifts a sign-in lockout (R1.9)
+  });
   console.log(
-    `create-admin: restored administrator access for ${email} (user #${existing.id}); its sessions were revoked.`
+    `create-admin: restored administrator access for ${email} (user #${existingId}); its sessions were revoked.`
   );
 } else {
-  if (fullName.length < 2 || fullName.length > 100) {
+  if (fullName.length < FULL_NAME_MIN_LENGTH || fullName.length > FULL_NAME_MAX_LENGTH) {
     fail('ADMIN_NAME (2-100 characters) is required to create a new account.');
   }
-  const info = db
-    .prepare(`
-      INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, created_at)
-      VALUES (?, ?, '', ?, ?, ?, 1, ?)
-    `)
-    .run(fullName, email, passwordHash, adminRole.slug, adminRole.id, new Date().toISOString());
-  console.log(`create-admin: created administrator ${email} (user #${Number(info.lastInsertRowid)}).`);
+  const userId = await withTransaction((trx) =>
+    users.users.insert(trx, {
+      full_name: fullName,
+      email,
+      phone: '',
+      password_hash: passwordHash,
+      role: adminRole.slug,
+      role_id: adminRole.id,
+      is_active: 1,
+      created_at: new Date().toISOString(),
+    })
+  );
+  console.log(`create-admin: created administrator ${email} (user #${userId}).`);
 }
 
 db.close();

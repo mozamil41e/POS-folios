@@ -54,10 +54,15 @@ export const emailField = z.preprocess(
 /** Passwords are never trimmed: spaces are part of the password. */
 const passwordText = (value: unknown) => (typeof value === 'string' ? value : '');
 
+const passwordReason = lengthReason(PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH);
+
 /** For new and changed passwords only; sign-in accepts older, shorter ones (R1.9). */
-export const newPasswordField = z.preprocess(
+export const newPasswordField = z.preprocess(passwordText, z.string().superRefine(check(passwordReason, PASSWORD_LENGTH_ERROR)));
+
+/** Editing an account: '' keeps the current password; anything else is a new password. */
+export const optionalNewPasswordField = z.preprocess(
   passwordText,
-  z.string().superRefine(check(lengthReason(PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH), PASSWORD_LENGTH_ERROR))
+  z.string().superRefine(check((value) => (value === '' ? null : passwordReason(value)), PASSWORD_LENGTH_ERROR))
 );
 
 function parse<T>(schema: z.ZodType<T>, raw: Raw): Parsed<T> {

@@ -38,6 +38,7 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   phone: { ar: 'رقم الجوال', en: 'Phone' },
   email: { ar: 'البريد الإلكتروني', en: 'Email' },
   full_name: { ar: 'الاسم الكامل', en: 'Full name' },
+  role_id: { ar: 'الدور الوظيفي', en: 'Role' },
   address_ar: { ar: 'العنوان', en: 'Address' },
   type: { ar: 'نوع الحركة', en: 'Movement type' },
   qty: { ar: 'الكمية', en: 'Quantity' },
@@ -102,6 +103,31 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
       return isAr
         ? 'الملف فيه أخطاء، لم يُستورد أي صنف. راجع المعاينة وصحّح الملف'
         : 'The file has problems; nothing was imported. Check the preview and fix the file';
+    // Users and roles (R2.4b)
+    case 'PASSWORD_TOO_SHORT':
+      return isAr ? 'كلمة المرور يجب أن تكون من 8 إلى 128 حرفاً' : 'The password must be 8 to 128 characters long';
+    case 'EMAIL_EXISTS':
+      return isAr ? 'هذا البريد مستخدم لحساب آخر' : 'This email is already used by another account';
+    case 'USER_NOT_FOUND':
+      return isAr ? 'المستخدم غير موجود، ربما حُذف' : 'User not found; it may have been deleted';
+    case 'CANNOT_DEACTIVATE_SELF':
+      return isAr ? 'لا يمكنك إيقاف حسابك أنت' : 'You cannot deactivate your own account';
+    case 'CANNOT_DELETE_SELF':
+      return isAr ? 'لا يمكنك حذف حسابك أنت' : 'You cannot delete your own account';
+    case 'LAST_ADMIN':
+      return isAr
+        ? 'لا يمكن تنزيل أو إيقاف آخر مدير للمستخدمين. امنح الصلاحية لحساب آخر أولاً'
+        : 'You cannot demote or deactivate the last user administrator. Give another account the permission first';
+    case 'ROLE_NOT_FOUND':
+      return isAr ? 'الدور غير موجود، ربما حُذف' : 'Role not found; it may have been deleted';
+    case 'SYSTEM_ROLE':
+      return isAr ? 'لا يمكن حذف دور مدير النظام' : 'The system administrator role cannot be deleted';
+    case 'ROLE_IN_USE':
+      return typeof body.count === 'number'
+        ? isAr
+          ? `لا يمكن حذف الدور: عليه ${body.count} مستخدم. انقلهم إلى دور آخر أولاً`
+          : `Cannot delete: ${body.count} user(s) still have this role. Move them first`
+        : null;
     case 'INSUFFICIENT_STOCK':
       return typeof body.available === 'number'
         ? isAr

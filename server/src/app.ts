@@ -5,6 +5,7 @@ import { loadConfig, type AppConfig } from './config/env.ts';
 import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { createLegacyRouter } from './legacy/routes.ts';
 import { createAuthRouter } from './modules/auth/routes.ts';
+import { createUsersRouter } from './modules/users/routes.ts';
 import { createInventoryRouter } from './modules/inventory/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { emptyBodyAsObject, requestId, requestLogger } from './middleware/request.ts';
@@ -85,6 +86,7 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   // One set of rate limiters per app, shared by the modules and the legacy routes.
   const limiters = createRateLimiters();
   app.use(createAuthRouter({ config, limiters }));
+  app.use(createUsersRouter());
   app.use(createInventoryRouter());
   // The routes not moved yet, as they were; R2.4b empties this router.
   app.use(createLegacyRouter({ limiters }));

@@ -41,6 +41,20 @@ describe('describeApiError (R1.10)', () => {
     );
   });
 
+  it('explains users and roles errors (R2.4b)', () => {
+    expect(describeApiError({ code: 'EMAIL_EXISTS' }, 'ar')).toBe('هذا البريد مستخدم لحساب آخر');
+    expect(describeApiError({ code: 'LAST_ADMIN' }, 'en')).toMatch(/last user administrator/);
+    expect(describeApiError({ code: 'ROLE_IN_USE', count: 2 }, 'ar')).toBe(
+      'لا يمكن حذف الدور: عليه 2 مستخدم. انقلهم إلى دور آخر أولاً'
+    );
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'phone', reason: 'TOO_LONG' }, 'ar')).toBe(
+      'رقم الجوال: أطول من المسموح'
+    );
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'role_id', reason: 'NOT_FOUND' }, 'en')).toBe(
+      'Role was not found'
+    );
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

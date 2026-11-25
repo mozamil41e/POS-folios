@@ -116,6 +116,21 @@ export function toNumberInput(value: unknown): unknown {
   return normalised === '' ? Number.NaN : Number(normalised);
 }
 
+/** Digits (Latin or Arabic), spaces, +, - and brackets; same rule as customers and suppliers (R1.10). */
+export const PHONE_PATTERN = /^[0-9٠-٩+\-\s()]+$/;
+
+/** Optional phone: '' or at most 30 characters matching PHONE_PATTERN. */
+export const phoneField = z.preprocess(
+  (v) => (isMissing(v) ? '' : String(v).trim()),
+  z
+    .string()
+    .refine((s) => s.length <= INPUT_LIMITS.phone, rule('TOO_LONG', `phone must be at most ${INPUT_LIMITS.phone} characters.`))
+    .refine(
+      (s) => s === '' || s.length > INPUT_LIMITS.phone || PHONE_PATTERN.test(s),
+      rule('INVALID_PHONE', 'Phone may contain digits, spaces, +, - and brackets only.')
+    )
+);
+
 /** Text: anything sent becomes a trimmed string; too long → TOO_LONG. */
 export function textField(field: string, max: number) {
   return z.preprocess(
