@@ -113,6 +113,11 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
       return isAr
         ? 'الملف فيه أخطاء، لم يُستورد أي صنف. راجع المعاينة وصحّح الملف'
         : 'The file has problems; nothing was imported. Check the preview and fix the file';
+    // Customers and suppliers (R2.4b); CUSTOMER_NOT_FOUND also comes from the checkout.
+    case 'CUSTOMER_NOT_FOUND':
+      return isAr ? 'العميل غير موجود' : 'Customer not found';
+    case 'SUPPLIER_NOT_FOUND':
+      return isAr ? 'المورد غير موجود' : 'Supplier not found';
     // Users and roles (R2.4b)
     case 'PASSWORD_TOO_SHORT':
       return isAr ? 'كلمة المرور يجب أن تكون من 8 إلى 128 حرفاً' : 'The password must be 8 to 128 characters long';

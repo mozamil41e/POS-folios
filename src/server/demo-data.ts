@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { InvoiceItem } from '../../shared/types.ts';
-import { db, getAllCustomers, getAllProducts, linkProductCategories } from './db.ts';
+import { db, getAllProducts, linkProductCategories } from './db.ts';
 import { nextDocumentNumber } from './sequences.ts';
 import { roundMoney } from '../../shared/money.ts';
 
@@ -196,7 +196,11 @@ function seedInitialVouchers(): void {
 
 function seedInitialInvoices(): void {
   const products = getAllProducts();
-  const customers = getAllCustomers();
+  const customers = db.prepare('SELECT id, name_ar, vat_number FROM customers ORDER BY id ASC').all() as Array<{
+    id: number;
+    name_ar: string;
+    vat_number: string;
+  }>;
 
   const samples = [
     {

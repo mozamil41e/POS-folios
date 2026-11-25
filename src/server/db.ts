@@ -3,7 +3,6 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import type {
   Category,
-  Customer,
   HeldCart,
   Invoice,
   InvoiceItem,
@@ -13,7 +12,6 @@ import type {
   Purchase,
   PurchaseItem,
   StockMovement,
-  Supplier,
   Voucher,
 } from '../../shared/types.ts';
 import { ALL_PERMISSION_KEYS } from '../../shared/permissions.ts';
@@ -502,18 +500,6 @@ export function getAllProducts(): Product[] {
   return db
     .prepare('SELECT * FROM products WHERE active = 1 ORDER BY id ASC')
     .all() as Product[];
-}
-
-export function getAllCustomers(): Customer[] {
-  return db
-    .prepare('SELECT * FROM customers ORDER BY id ASC')
-    .all() as Customer[];
-}
-
-export function getAllSuppliers(): Supplier[] {
-  return db
-    .prepare('SELECT * FROM suppliers ORDER BY id DESC')
-    .all() as Supplier[];
 }
 
 export function getAllPurchases(): Purchase[] {

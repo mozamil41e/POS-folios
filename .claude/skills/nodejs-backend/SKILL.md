@@ -12,7 +12,7 @@ Practical rules for building the Express backend described in `docs/ARCHITECTURE
 - **Don't use for:** SQL schema design or migrations (use `mysql-database`), deployment or CI (use `devops`), UI (use `react-frontend`).
 
 ## Current state (read before editing)
-- Since R2.1: `server/src/main.ts` (entry, env check, Vite or dist), `server/src/app.ts` (`createApp`: request id, pino request log, helmet, JSON, routes, central error handler), `config/env.ts` (zod), `shared/errors.ts` (`AppError` family), `logger.ts`. All routes are still inline in `server/src/legacy/routes.ts`, with validation in `src/server/input-rules.ts` and SQL through better-sqlite3 directly.
+- Since R2.1: `server/src/main.ts` (entry, env check, Vite or dist), `server/src/app.ts` (`createApp`: request id, pino request log, helmet, JSON, routes, central error handler), `config/env.ts` (zod), `shared/errors.ts` (`AppError` family), `logger.ts`. All routes are still inline in `server/src/legacy/routes.ts`, with SQL through better-sqlite3 directly. Since R2.4 the domains move into `server/src/modules/` (inventory, auth, users, settings, customers, suppliers so far), with zod rules in `shared/schemas/`.
 - `src/server/db.ts` holds the schema, ad-hoc migrations and the legacy queries. Since R2.4b sessions, scrypt and the login lockout live in `server/src/modules/auth/` (`repository.ts`, `passwords.ts`, `lockout.ts`); legacy code calls them through `modules/auth/service.ts`.
 - Express 5 (R2.1): async errors reach the error handler without a wrapper; `req.body` is normalised to `{}` when there is no JSON body.
 - Transitional rule (R1): make **minimal, tested** fixes in place. Don't half-migrate a route to the new structure during R1.

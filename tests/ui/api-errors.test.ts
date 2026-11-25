@@ -64,6 +64,11 @@ describe('describeApiError (R1.10)', () => {
     );
   });
 
+  it('explains customer and supplier errors (R2.4b)', () => {
+    expect(describeApiError({ code: 'CUSTOMER_NOT_FOUND' }, 'ar')).toBe('العميل غير موجود');
+    expect(describeApiError({ code: 'SUPPLIER_NOT_FOUND' }, 'en')).toBe('Supplier not found');
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

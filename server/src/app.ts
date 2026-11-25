@@ -5,7 +5,9 @@ import { loadConfig, type AppConfig } from './config/env.ts';
 import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { createLegacyRouter } from './legacy/routes.ts';
 import { createAuthRouter } from './modules/auth/routes.ts';
+import { createCustomersRouter } from './modules/customers/routes.ts';
 import { createSettingsRouter } from './modules/settings/routes.ts';
+import { createSuppliersRouter } from './modules/suppliers/routes.ts';
 import { createUsersRouter } from './modules/users/routes.ts';
 import { createInventoryRouter } from './modules/inventory/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
@@ -89,6 +91,8 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(createAuthRouter({ config, limiters }));
   app.use(createUsersRouter());
   app.use(createSettingsRouter());
+  app.use(createCustomersRouter());
+  app.use(createSuppliersRouter());
   app.use(createInventoryRouter());
   // The routes not moved yet, as they were; R2.4b empties this router.
   app.use(createLegacyRouter({ limiters }));

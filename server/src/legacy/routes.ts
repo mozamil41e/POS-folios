@@ -11,11 +11,9 @@ import { Router, type Request, type Response } from 'express';
 import {
   db,
   getAllCategories,
-  getAllCustomers,
   getAllInvoices,
   getAllProducts,
   getAllPurchases,
-  getAllSuppliers,
   getAllVouchers,
   getHeldCarts,
   getOrganizationSettings,
@@ -26,19 +24,16 @@ import { canViewData, type VisibleDataKey } from '../../../shared/permissions.ts
 import { scopeForUser } from '../../../src/server/visibility.ts';
 import { isValidVatNumber } from '../../../shared/validation.ts';
 import { nextDocumentNumber } from '../../../src/server/sequences.ts';
+import { lists as customersLists } from '../modules/customers/service.ts';
 import { getSettings } from '../modules/settings/service.ts';
+import { lists as suppliersLists } from '../modules/suppliers/service.ts';
 import { lists as usersLists } from '../modules/users/service.ts';
-import {
-  parseCustomerInput,
-  parseSupplierInput,
-} from '../../../src/server/input-rules.ts';
 import {
   noIndex,
   type RateLimiters,
 } from '../../../src/server/security.ts';
 import type {
   AuthUser,
-  Customer,
   Invoice,
   InvoiceItem,
   InvoiceSubtype,
@@ -101,8 +96,8 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
         settings: await getSettings(),
         products: can('products') ? getAllProducts() : undefined,
         categories: can('categories') ? getAllCategories() : undefined,
-        customers: can('customers') ? getAllCustomers() : undefined,
-        suppliers: can('suppliers') ? getAllSuppliers() : undefined,
+        customers: can('customers') ? await customersLists.customers() : undefined,
+        suppliers: can('suppliers') ? await suppliersLists.suppliers() : undefined,
         purchases: can('purchases') ? getAllPurchases() : undefined,
         invoices: can('invoices') ? getAllInvoices() : undefined,
         movements: can('movements') ? getRecentMovements(80) : undefined,
@@ -215,59 +210,7 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
 
   // Products, stock movements and categories moved to server/src/modules/inventory (R2.4a).
 
-  // Suppliers & Purchases CRUD
-  router.post('/api/suppliers', requirePermission('purchases.manage'), (req: Request, res: Response) => {
-    // R1.10: name required; VAT number optional but valid when given (D12 format).
-    const {
-      name_ar: nameAr,
-      name_en: nameEn,
-      vat_number: vatNumber,
-      cr_number: crNumber,
-      phone,
-      email,
-      address_ar: addressAr,
-    } = parseSupplierInput(req.body as Record<string, unknown>);
-
-    const info = db
-      .prepare(`
-        INSERT INTO suppliers (name_ar, name_en, vat_number, cr_number, phone, email, address_ar, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(nameAr, nameEn, vatNumber, crNumber, phone, email, addressAr, new Date().toISOString());
-
-    res.status(201).json({
-      supplierId: info.lastInsertRowid,
-      suppliers: getAllSuppliers(),
-    });
-  });
-
-  router.put('/api/suppliers/:id', requirePermission('purchases.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id) as Supplier | undefined;
-    if (!existing) {
-      res.status(404).json({ error: 'Supplier not found.' });
-      return;
-    }
-
-    const input = parseSupplierInput(req.body as Record<string, unknown>, existing);
-    db.prepare(`
-      UPDATE suppliers
-      SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?, phone = ?, email = ?, address_ar = ?
-      WHERE id = ?
-    `).run(
-      input.name_ar,
-      input.name_en,
-      input.vat_number,
-      input.cr_number,
-      input.phone,
-      input.email,
-      input.address_ar,
-      id
-    );
-
-    res.json({ suppliers: getAllSuppliers() });
-  });
-
+  // Purchases (suppliers moved to server/src/modules/suppliers, R2.4b)
   const PURCHASE_ERROR_CODES: ReadonlySet<string> = new Set([
     'SUPPLIER_NOT_FOUND',
     'PRODUCT_NOT_FOUND',
@@ -469,58 +412,6 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
     );
 
     sendScoped(res, { purchases: getAllPurchases() });
-  });
-
-  // Customers CRUD for B2B
-  router.post('/api/customers', requirePermission('customers.manage'), (req: Request, res: Response) => {
-    // R1.10: name required; VAT number optional but valid when given (D12 format).
-    const {
-      name_ar: nameAr,
-      name_en: nameEn,
-      vat_number: vatNumber,
-      cr_number: crNumber,
-      address_ar: addressAr,
-      phone,
-    } = parseCustomerInput(req.body as Record<string, unknown>);
-
-    const now = new Date().toISOString();
-    const info = db
-      .prepare(`
-        INSERT INTO customers (name_ar, name_en, vat_number, cr_number, address_ar, phone, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(nameAr, nameEn, vatNumber, crNumber, addressAr, phone, now);
-
-    res.status(201).json({
-      customerId: info.lastInsertRowid,
-      customers: getAllCustomers(),
-    });
-  });
-
-  router.put('/api/customers/:id', requirePermission('customers.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id) as Customer | undefined;
-    if (!existing) {
-      res.status(404).json({ error: 'Customer not found.' });
-      return;
-    }
-
-    const input = parseCustomerInput(req.body as Record<string, unknown>, existing);
-    db.prepare(`
-      UPDATE customers
-      SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?, address_ar = ?, phone = ?
-      WHERE id = ?
-    `).run(
-      input.name_ar,
-      input.name_en,
-      input.vat_number,
-      input.cr_number,
-      input.address_ar,
-      input.phone,
-      id
-    );
-
-    res.json({ customers: getAllCustomers() });
   });
 
   // Held carts
