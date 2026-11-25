@@ -4,6 +4,7 @@ import { createRateLimiters, resolveTrustProxy, securityHeaders } from '../../sr
 import { loadConfig, type AppConfig } from './config/env.ts';
 import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { createLegacyRouter } from './legacy/routes.ts';
+import { createAuthRouter } from './modules/auth/routes.ts';
 import { createInventoryRouter } from './modules/inventory/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { emptyBodyAsObject, requestId, requestLogger } from './middleware/request.ts';
@@ -46,6 +47,7 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
       return;
     }
     if (err instanceof AppError) {
+      res.set(err.headers);
       res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
       return;
     }
@@ -80,9 +82,12 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(requestsWaitWhileTransactionOpen());
 
   // Modules first (R2.4, strangler): each authenticates its own routes.
+  // One set of rate limiters per app, shared by the modules and the legacy routes.
+  const limiters = createRateLimiters();
+  app.use(createAuthRouter({ config, limiters }));
   app.use(createInventoryRouter());
   // The routes not moved yet, as they were; R2.4b empties this router.
-  app.use(createLegacyRouter({ config, limiters: createRateLimiters() }));
+  app.use(createLegacyRouter({ limiters }));
 
   const errorHandler = createErrorHandler(logger);
   app.use(errorHandler);

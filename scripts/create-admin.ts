@@ -8,14 +8,9 @@
 //   Bash:        ADMIN_EMAIL=owner@example.com ADMIN_NAME=Owner ADMIN_PASSWORD='...' npm run admin:create
 //
 // It uses the same database as the server: MIZAN_DB_PATH, or ./data/mizan-pos.db.
-import {
-  db,
-  getRoleBySlug,
-  hashPassword,
-  initDatabase,
-  revokeAllSessionsForUser,
-} from '../src/server/db.ts';
-import { clearLoginFailures } from '../src/server/login-guard.ts';
+import { db, getRoleBySlug, initDatabase } from '../src/server/db.ts';
+import { hashPassword } from '../server/src/modules/auth/passwords.ts';
+import { clearLoginFailures, revokeAllSessionsForUser } from '../server/src/modules/auth/service.ts';
 import { isValidPasswordLength } from '../shared/validation.ts';
 
 function fail(message: string): never {
@@ -50,8 +45,8 @@ if (existing) {
   db.prepare(
     'UPDATE users SET password_hash = ?, role = ?, role_id = ?, is_active = 1 WHERE id = ?'
   ).run(passwordHash, adminRole.slug, adminRole.id, existing.id);
-  revokeAllSessionsForUser(existing.id);
-  clearLoginFailures(db, email); // also lifts a sign-in lockout (R1.9)
+  await revokeAllSessionsForUser(existing.id);
+  await clearLoginFailures(email); // also lifts a sign-in lockout (R1.9)
   console.log(
     `create-admin: restored administrator access for ${email} (user #${existing.id}); its sessions were revoked.`
   );

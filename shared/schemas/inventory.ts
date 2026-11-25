@@ -11,6 +11,7 @@ import {
   toNumberInput,
   wholeNumberField,
   type FieldProblem,
+  type Parsed,
   type Raw,
 } from './common';
 
@@ -22,7 +23,7 @@ import {
  * Each parse returns either the clean value or every problem (one per field):
  * the API reports the first, the CSV import shows them all.
  */
-export type Parsed<T> = { ok: true; value: T } | { ok: false; problems: FieldProblem[] };
+export type { Parsed };
 
 const fail = (problems: FieldProblem[]): { ok: false; problems: FieldProblem[] } => ({ ok: false, problems });
 

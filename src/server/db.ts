@@ -1,9 +1,7 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import type {
-  AuthUser,
   Category,
   Customer,
   HeldCart,
@@ -341,7 +339,7 @@ export function initDatabase(): void {
       updated_at TEXT NOT NULL
     );
 
-    -- Failed logins per email for the temporary lockout (R1.9): see src/server/login-guard.ts
+    -- Failed logins per email for the temporary lockout (R1.9): see server/src/modules/auth/lockout.ts
     CREATE TABLE IF NOT EXISTS login_attempts (
       email TEXT PRIMARY KEY,
       failed_count INTEGER NOT NULL DEFAULT 0,
@@ -678,41 +676,6 @@ export function getPublicInvoiceByUuid(uuid: string): {
   };
 }
 
-// The async scrypt runs on libuv's thread pool, so logins no longer block every
-// other request (R1.9, SEC-07). Same parameters as before (Node defaults,
-// 64-byte key), so hashes stored by the old scryptSync code still verify.
-function scryptAsync(password: string, salt: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    crypto.scrypt(password, salt, 64, (err, derived) => (err ? reject(err) : resolve(derived)));
-  });
-}
-
-export async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derived = await scryptAsync(password, salt);
-  return `${salt}:${derived.toString('hex')}`;
-}
-
-export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  const parts = storedHash.split(':');
-  if (parts.length !== 2) return false;
-  const [salt, hexHash] = parts;
-  if (!salt || !hexHash) return false;
-  try {
-    const derived = await scryptAsync(password, salt);
-    const expected = Buffer.from(hexHash, 'hex');
-    if (derived.length !== expected.length) return false;
-    return crypto.timingSafeEqual(derived, expected);
-  } catch {
-    return false;
-  }
-}
-
-export function hasAnyUsers(): boolean {
-  const row = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
-  return row.cnt > 0;
-}
-
 function seedAndMigrateRolesAndUsers(): void {
   const now = new Date().toISOString();
   const defaultRoles: Array<{
@@ -962,107 +925,4 @@ export function getAllUsers(): ManagedUser[] {
       created_at: row.created_at,
     };
   });
-}
-
-export function resolveAuthUserById(userId: number): AuthUser | null {
-  const row = db
-    .prepare(`
-      SELECT u.id, u.full_name, u.email, u.phone, u.role, u.role_id, u.is_active, u.created_at,
-             COALESCE(r.slug, u.role) as role_slug,
-             COALESCE(r.name_ar, u.role) as role_name_ar,
-             COALESCE(r.name_en, u.role) as role_name_en,
-             COALESCE(r.permissions_json, '[]') as permissions_json
-      FROM users u
-      LEFT JOIN roles r ON r.id = u.role_id
-      WHERE u.id = ?
-    `)
-    .get(userId) as
-    | {
-        id: number;
-        full_name: string;
-        email: string;
-        phone: string;
-        role: string;
-        role_id: number | null;
-        is_active: number;
-        created_at: string;
-        role_slug: string;
-        role_name_ar: string;
-        role_name_en: string;
-        permissions_json: string;
-      }
-    | undefined;
-
-  if (!row) return null;
-  let perms: PermissionKey[] = [];
-  if (row.role_slug === 'admin') {
-    perms = [...ALL_PERMISSION_KEYS];
-  } else {
-    try {
-      perms = sanitizePermissions(JSON.parse(row.permissions_json));
-    } catch {
-      perms = [];
-    }
-  }
-
-  return {
-    id: row.id,
-    full_name: row.full_name,
-    email: row.email,
-    phone: row.phone ?? '',
-    role: row.role_slug,
-    role_id: row.role_id ?? 0,
-    role_name_ar: row.role_name_ar,
-    role_name_en: row.role_name_en,
-    permissions: perms,
-    is_active: row.is_active ?? 1,
-    created_at: row.created_at,
-  };
-}
-
-export function createSessionForUser(userId: number): { token: string; expiresAt: string } {
-  const token = crypto.randomBytes(32).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-  db.prepare('DELETE FROM user_sessions WHERE user_id = ? AND expires_at <= ?').run(
-    userId,
-    now.toISOString()
-  );
-
-  db.prepare(`
-    INSERT INTO user_sessions (user_id, token_hash, expires_at, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(userId, tokenHash, expiresAt, now.toISOString());
-
-  return { token, expiresAt };
-}
-
-export function getUserBySessionToken(token: string): AuthUser | null {
-  if (!token) return null;
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  const nowIso = new Date().toISOString();
-
-  const row = db
-    .prepare(`
-      SELECT u.id
-      FROM user_sessions s
-      JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = ? AND s.expires_at > ? AND u.is_active = 1
-    `)
-    .get(tokenHash, nowIso) as { id: number } | undefined;
-
-  if (!row) return null;
-  return resolveAuthUserById(row.id);
-}
-
-export function revokeSessionToken(token: string): void {
-  if (!token) return;
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(tokenHash);
-}
-
-export function revokeAllSessionsForUser(userId: number): void {
-  db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
 }

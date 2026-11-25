@@ -32,6 +32,15 @@ describe('describeApiError (R1.10)', () => {
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'category_id', reason: 'NOT_FOUND' }, 'ar')).toBe('التصنيف: غير موجود');
   });
 
+  it('explains account name and email problems (R2.4b)', () => {
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'full_name', reason: 'TOO_SHORT' }, 'ar')).toBe(
+      'الاسم الكامل: أقصر من المسموح'
+    );
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'email', reason: 'INVALID_EMAIL' }, 'en')).toBe(
+      'Email is not a valid email address'
+    );
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

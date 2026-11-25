@@ -13,7 +13,7 @@ Practical rules for building the Express backend described in `docs/ARCHITECTURE
 
 ## Current state (read before editing)
 - Since R2.1: `server/src/main.ts` (entry, env check, Vite or dist), `server/src/app.ts` (`createApp`: request id, pino request log, helmet, JSON, routes, central error handler), `config/env.ts` (zod), `shared/errors.ts` (`AppError` family), `logger.ts`. All routes are still inline in `server/src/legacy/routes.ts`, with validation in `src/server/input-rules.ts` and SQL through better-sqlite3 directly.
-- `src/server/db.ts` holds the schema, ad-hoc migrations, demo seeds, queries, sessions and scrypt.
+- `src/server/db.ts` holds the schema, ad-hoc migrations and the legacy queries. Since R2.4b sessions, scrypt and the login lockout live in `server/src/modules/auth/` (`repository.ts`, `passwords.ts`, `lockout.ts`); legacy code calls them through `modules/auth/service.ts`.
 - Express 5 (R2.1): async errors reach the error handler without a wrapper; `req.body` is normalised to `{}` when there is no JSON body.
 - Transitional rule (R1): make **minimal, tested** fixes in place. Don't half-migrate a route to the new structure during R1.
 - From R2: move **one domain at a time** into `server/src/modules/<domain>/`. Keep the old path working (alias to the new controller) until the frontend migrates.
@@ -102,7 +102,8 @@ export const validate = (s: { body?: ZodTypeAny; query?: ZodTypeAny; params?: Zo
   - sets `res.locals.authUser`.
 - `requirePermission(key)` checks `authUser.permissions.includes(key)`. The `admin` role always gets every key (as `db.ts` does today).
 - CSRF: on non-GET requests, check that `Origin` matches the configured app origin **and** that the `X-CSRF-Token` header equals the CSRF cookie.
-- Passwords: `await scryptAsync(pw, salt, 64)`, compared with `timingSafeEqual`. Never use `scryptSync`, because it blocks the event loop (`db.ts:985`).
+- Passwords: `hashPassword`/`verifyPassword` in `server/src/modules/auth/passwords.ts` (async scrypt, 64-byte key, `timingSafeEqual`). Never use `scryptSync`, because it blocks the event loop. Hash **before** `withTransaction()`, never inside it.
+- A 429 is a `TooManyRequestsError` (sets `retryAfterSeconds` and the `Retry-After` header); `AppError` can carry response headers.
 - Login: rate limit per IP in memory (single process), record each attempt in `login_attempts`, lock out after 5 failures in 15 minutes, and always reply with the same generic message.
 - There is no self-registration. `POST /auth/setup` only works when the users table is empty **and** `SETUP_TOKEN` matches.
 

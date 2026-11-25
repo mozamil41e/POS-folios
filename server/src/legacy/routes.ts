@@ -1,14 +1,14 @@
 /**
  * Legacy API routes (R2.1). The route code of the former server.ts, moved
  * here unchanged except for: Express 5 (no asyncHandler wrapper), the router
- * instead of the app, and the setup token read from the validated config.
- * Strangler: R2.4 moves each domain out into server/src/modules/<domain>,
- * starting with products/inventory (R2.4a); delete this file when empty.
+ * instead of the app.
+ * Strangler: R2.4 moves each domain out into server/src/modules/<domain>:
+ * products/inventory (R2.4a), then auth (R2.4b: setup, sign-in, sessions);
+ * delete this file when empty.
  */
 import crypto from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import {
-  createSessionForUser,
   db,
   getAllCategories,
   getAllCustomers,
@@ -24,13 +24,6 @@ import {
   getPublicInvoiceByUuid,
   getRecentMovements,
   getRoleById,
-  getRoleBySlug,
-  hasAnyUsers,
-  hashPassword,
-  resolveAuthUserById,
-  revokeAllSessionsForUser,
-  revokeSessionToken,
-  verifyPassword,
 } from '../../../src/server/db.ts';
 import {
   ALL_PERMISSION_KEYS,
@@ -43,9 +36,11 @@ import { isValidPasswordLength, isValidVatNumber } from '../../../shared/validat
 import { nextDocumentNumber } from '../../../src/server/sequences.ts';
 import {
   clearLoginFailures,
-  loginLockRemainingMs,
-  recordLoginFailure,
-} from '../../../src/server/login-guard.ts';
+  hashPassword,
+  resolveAuthUserById,
+  revokeAllSessionsForUser,
+} from '../modules/auth/service.ts';
+import { PASSWORD_LENGTH_ERROR } from '../../../shared/schemas/auth.ts';
 import {
   parseCustomerInput,
   parseSupplierInput,
@@ -70,21 +65,17 @@ import type {
   VoucherChannel,
   VoucherType,
 } from '../../../shared/types.ts';
-import type { AppConfig } from '../config/env.ts';
 import { requireAuth, requirePermission } from '../middleware/auth.ts';
 import { sendScoped } from '../shared/respond.ts';
 import { roundMoney } from '../../../shared/money.ts';
 import { DOCUMENT_TYPES, INVOICE_KINDS, PAYMENT_METHODS } from '../../../shared/constants.ts';
 
 export interface LegacyContext {
-  config: AppConfig;
   limiters: RateLimiters;
 }
 
-export function createLegacyRouter({ config, limiters }: LegacyContext): Router {
+export function createLegacyRouter({ limiters }: LegacyContext): Router {
   const router = Router();
-
-  const PASSWORD_LENGTH_ERROR = 'Password must be between 8 and 128 characters.';
 
   // Business errors thrown inside transactions as Error('CODE') or Error('CODE:detail').
   // Only these are reported to the client as 400; anything else is a 500 (R1.5, SEC-10).
@@ -110,203 +101,9 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
     res.json(payload);
   });
 
-  // Public Authentication Routes
-  router.get('/api/auth/status', (_req: Request, res: Response) => {
-    res.json({
-      hasUsers: hasAnyUsers(),
-      setupTokenRequired: Boolean(config.setupToken),
-    });
-  });
-
-  // When SETUP_TOKEN is configured (always in production), first-run setup must
-  // present it. Without it (local development) setup stays open on an empty DB.
-  function setupTokenMatches(provided: unknown): boolean {
-    const expected = config.setupToken;
-    if (!expected) return true;
-    if (typeof provided !== 'string' || provided.length === 0) return false;
-    const a = crypto.createHash('sha256').update(provided).digest();
-    const b = crypto.createHash('sha256').update(expected).digest();
-    return crypto.timingSafeEqual(a, b);
-  }
-
-  const REGISTRATION_CLOSED_RESPONSE = {
-    error: 'Registration is closed. Ask an administrator to create your account.',
-    code: 'REGISTRATION_CLOSED',
-  };
-
-  // First-run setup only (SEC-01): creates the first administrator while the
-  // users table is empty. Afterwards accounts are created by an admin via /api/users.
-  router.post('/api/auth/register', limiters.setup, async (req: Request, res: Response) => {
-    if (hasAnyUsers()) {
-      res.status(403).json(REGISTRATION_CLOSED_RESPONSE);
-      return;
-    }
-
-    const b = req.body as Record<string, unknown>;
-    if (!setupTokenMatches(b.setup_token)) {
-      res.status(403).json({ error: 'Invalid setup token.', code: 'INVALID_SETUP_TOKEN' });
-      return;
-    }
-
-    const fullName = String(b.full_name ?? '').trim();
-    const email = String(b.email ?? '').trim().toLowerCase();
-    const password = typeof b.password === 'string' ? b.password : '';
-
-    if (fullName.length < 2 || fullName.length > 100) {
-      res.status(400).json({ error: 'Full name must be between 2 and 100 characters.' });
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
-      res.status(400).json({ error: 'Valid email address is required.' });
-      return;
-    }
-    if (!isValidPasswordLength(password)) {
-      res.status(400).json({ error: PASSWORD_LENGTH_ERROR, code: 'PASSWORD_TOO_SHORT' });
-      return;
-    }
-
-    // Hashed before the transaction: better-sqlite3 transactions cannot await.
-    const passwordHash = await hashPassword(password);
-
-    try {
-      const registerTx = db.transaction(() => {
-        // Re-checked inside the transaction so two simultaneous setup requests
-        // cannot both create an account.
-        const countRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
-        if (countRow.cnt > 0) {
-          throw new Error('REGISTRATION_CLOSED');
-        }
-
-        const targetSlug = 'admin';
-        const targetRole = getRoleBySlug(targetSlug);
-        const now = new Date().toISOString();
-
-        const info = db
-          .prepare(`
-            INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, last_login_at, created_at)
-            VALUES (?, ?, '', ?, ?, ?, 1, ?, ?)
-          `)
-          .run(
-            fullName,
-            email,
-            passwordHash,
-            targetRole?.slug ?? targetSlug,
-            targetRole?.id ?? null,
-            now,
-            now
-          );
-
-        const userId = Number(info.lastInsertRowid);
-        const session = createSessionForUser(userId);
-        const authUser = resolveAuthUserById(userId);
-        return {
-          token: session.token,
-          user: authUser,
-        };
-      });
-
-      const result = registerTx();
-      res.status(201).json(result);
-    } catch (err) {
-      if (err instanceof Error && err.message === 'REGISTRATION_CLOSED') {
-        res.status(403).json(REGISTRATION_CLOSED_RESPONSE);
-        return;
-      }
-      res.status(400).json({ error: 'Failed to create account.' });
-    }
-  });
-
-  function sendLoginLocked(res: Response, retryAfterMs: number): void {
-    const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
-    res.setHeader('Retry-After', String(retryAfterSeconds));
-    res.status(429).json({
-      error: 'Too many failed sign-in attempts. Sign-in is paused for this account.',
-      code: 'LOGIN_LOCKED',
-      retryAfterSeconds,
-    });
-  }
-
-  // Compared against when the email is unknown, so both cases take the same
-  // time and the response does not reveal which emails have accounts.
-  let timingDummyHash: Promise<string> | null = null;
-  const dummyPasswordHash = () => (timingDummyHash ??= hashPassword(crypto.randomUUID()));
-
-  router.post('/api/auth/login', limiters.login, async (req: Request, res: Response) => {
-    const b = req.body as Record<string, unknown>;
-    const email = String(b.email ?? '').trim().toLowerCase();
-    const password = typeof b.password === 'string' ? b.password : '';
-
-    if (!email || !password) {
-      res.status(400).json({ error: 'Email and password are required.' });
-      return;
-    }
-
-    // R1.9 (SEC-05): while locked, even the right password is refused.
-    const lockedForMs = loginLockRemainingMs(db, email);
-    if (lockedForMs > 0) {
-      sendLoginLocked(res, lockedForMs);
-      return;
-    }
-
-    const user = db
-      .prepare('SELECT id, password_hash, is_active FROM users WHERE email = ?')
-      .get(email) as
-      | {
-          id: number;
-          password_hash: string;
-          is_active: number;
-        }
-      | undefined;
-
-    const passwordOk = await verifyPassword(password, user?.password_hash ?? (await dummyPasswordHash()));
-    if (!user || !passwordOk) {
-      const failure = recordLoginFailure(db, email);
-      if (failure.locked) {
-        sendLoginLocked(res, failure.retryAfterMs);
-        return;
-      }
-      res.status(401).json({
-        error: 'Invalid email or password.',
-        code: 'INVALID_CREDENTIALS',
-        attemptsLeft: failure.attemptsLeft,
-      });
-      return;
-    }
-
-    clearLoginFailures(db, email);
-
-    if (user.is_active === 0) {
-      res.status(403).json({
-        error: 'This account has been deactivated by an administrator.',
-      });
-      return;
-    }
-
-    db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(
-      new Date().toISOString(),
-      user.id
-    );
-    const session = createSessionForUser(user.id);
-    const authUser = resolveAuthUserById(user.id);
-    res.json({
-      token: session.token,
-      user: authUser,
-    });
-  });
-
   // Require valid Bearer session token for all private /api routes
   // (server/src/middleware/auth.ts; the modules use the same checks, R2.4a).
   router.use('/api', requireAuth());
-
-  router.get('/api/auth/me', (_req: Request, res: Response) => {
-    res.json({ user: res.locals.authUser });
-  });
-
-  router.post('/api/auth/logout', (_req: Request, res: Response) => {
-    const token = String(res.locals.authToken ?? '');
-    revokeSessionToken(token);
-    res.json({ ok: true });
-  });
 
   // Bootstrap the workspace — only the data this user may read (R1.3).
   router.get('/api/bootstrap', (_req: Request, res: Response) => {
@@ -379,14 +176,14 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
       res.status(409).json({ error: 'An account with this email already exists.' });
       return;
     }
-    // Failures recorded before the account existed must not carry over.
-    clearLoginFailures(db, email);
     const info = db
       .prepare(`
         INSERT INTO users (full_name, email, phone, password_hash, role, role_id, is_active, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(fullName, email, phone, passwordHash, targetRole.slug, targetRole.id, isActive, now);
+    // Failures recorded before the account existed must not carry over.
+    await clearLoginFailures(email);
 
     res.status(201).json({
       userId: Number(info.lastInsertRowid),
@@ -495,23 +292,28 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
 
       if (newPasswordHash) {
         db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newPasswordHash, id);
-        // An administrator setting a new password also lifts a lockout (R1.9).
-        clearLoginFailures(db, existing.email, email);
       }
     })();
 
+    // R2.4b: the lockout and sessions belong to the auth module (Kysely, same
+    // connection). These awaits run only database work, so no other request
+    // can come in between the update and the revocation.
+    if (newPasswordHash) {
+      // An administrator setting a new password also lifts a lockout (R1.9).
+      await clearLoginFailures(existing.email, email);
+    }
     if (nextActive === 0 || password) {
-      revokeAllSessionsForUser(id);
+      await revokeAllSessionsForUser(id);
     }
 
     res.json({
       users: getAllUsers(),
       roles: getAllRoles(),
-      currentUser: id === authUser.id ? resolveAuthUserById(authUser.id) : undefined,
+      currentUser: id === authUser.id ? await resolveAuthUserById(authUser.id) : undefined,
     });
   });
 
-  router.delete('/api/users/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+  router.delete('/api/users/:id', requirePermission('users.manage'), async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     const authUser = res.locals.authUser as AuthUser;
     if (id === authUser.id) {
@@ -525,7 +327,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
       return;
     }
 
-    revokeAllSessionsForUser(id);
+    await revokeAllSessionsForUser(id);
     db.prepare('DELETE FROM users WHERE id = ?').run(id);
 
     res.json({
@@ -573,7 +375,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
     });
   });
 
-  router.put('/api/roles/:id', requirePermission('users.manage'), (req: Request, res: Response) => {
+  router.put('/api/roles/:id', requirePermission('users.manage'), async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     const authUser = res.locals.authUser as AuthUser;
     const role = getRoleById(id);
@@ -610,7 +412,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
       role: getRoleById(id),
       roles: getAllRoles(),
       users: getAllUsers(),
-      currentUser: resolveAuthUserById(authUser.id),
+      currentUser: await resolveAuthUserById(authUser.id),
     });
   });
 

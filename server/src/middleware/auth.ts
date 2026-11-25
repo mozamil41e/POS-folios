@@ -1,17 +1,17 @@
 import type { RequestHandler } from 'express';
-import { getUserBySessionToken } from '../../../src/server/db.ts';
+import { userForSession } from '../modules/auth/service.ts';
 import type { AuthUser, PermissionKey } from '../../../shared/types.ts';
 
 /**
  * Bearer-session authentication and permission checks (moved out of the
- * legacy routes in R2.4a so the modules use the same code). Cookie sessions
- * replace the Bearer token in R2.6.
+ * legacy routes in R2.4a so the modules use the same code). Sessions belong
+ * to the auth module (R2.4b). Cookie sessions replace the Bearer token in R2.6.
  */
 export function requireAuth(): RequestHandler {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-    const user = getUserBySessionToken(token);
+    const user = token ? await userForSession(token) : null;
     if (!user) {
       res.status(401).json({ error: 'Authentication required.' });
       return;

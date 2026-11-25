@@ -12,13 +12,35 @@ export class AppError extends Error {
   readonly code: string;
   /** Extra fields for the client (field, reason, available, count, ...). */
   readonly details: Record<string, unknown>;
+  /** Response headers the error handler sets with the JSON (e.g. Retry-After). */
+  readonly headers: Record<string, string>;
 
-  constructor(status: number, code: string, message: string, details: Record<string, unknown> = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details: Record<string, unknown> = {},
+    headers: Record<string, string> = {}
+  ) {
     super(message);
     this.name = new.target.name;
     this.status = status;
     this.code = code;
     this.details = details;
+    this.headers = headers;
+  }
+}
+
+export class UnauthorizedError extends AppError {
+  constructor(code: string, message: string, details: Record<string, unknown> = {}) {
+    super(401, code, message, details);
+  }
+}
+
+/** 429 with `retryAfterSeconds` in the body and the Retry-After header. */
+export class TooManyRequestsError extends AppError {
+  constructor(code: string, message: string, retryAfterSeconds: number) {
+    super(429, code, message, { retryAfterSeconds }, { 'Retry-After': String(retryAfterSeconds) });
   }
 }
 

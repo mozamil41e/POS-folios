@@ -8,6 +8,7 @@ import { z } from 'zod';
  */
 export const INPUT_REASONS = [
   'REQUIRED',
+  'TOO_SHORT',
   'TOO_LONG',
   'INVALID_NUMBER',
   'NOT_INTEGER',
@@ -52,6 +53,12 @@ export const INPUT_LIMITS = {
 } as const;
 
 export type Raw = Record<string, unknown>;
+
+/**
+ * The result of a parse: the clean value, or every problem (one per field).
+ * The API reports the first; the CSV import shows them all.
+ */
+export type Parsed<T> = { ok: true; value: T } | { ok: false; problems: FieldProblem[] };
 
 /** Attaches a reason code to a zod refinement. */
 export function rule(reason: InputReason, message: string) {

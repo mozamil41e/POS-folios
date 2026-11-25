@@ -37,6 +37,7 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   cr_number: { ar: 'السجل التجاري', en: 'CR number' },
   phone: { ar: 'رقم الجوال', en: 'Phone' },
   email: { ar: 'البريد الإلكتروني', en: 'Email' },
+  full_name: { ar: 'الاسم الكامل', en: 'Full name' },
   address_ar: { ar: 'العنوان', en: 'Address' },
   type: { ar: 'نوع الحركة', en: 'Movement type' },
   qty: { ar: 'الكمية', en: 'Quantity' },
@@ -48,6 +49,7 @@ const FIELD_LABELS: Record<string, Bilingual> = {
 
 const REASONS: Record<string, Bilingual> = {
   REQUIRED: { ar: 'مطلوب', en: 'is required' },
+  TOO_SHORT: { ar: 'أقصر من المسموح', en: 'is too short' },
   TOO_LONG: { ar: 'أطول من المسموح', en: 'is too long' },
   INVALID_NUMBER: { ar: 'يجب أن يكون رقماً', en: 'must be a number' },
   NOT_INTEGER: { ar: 'يجب أن يكون عدداً صحيحاً', en: 'must be a whole number' },

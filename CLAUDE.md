@@ -93,8 +93,9 @@ Do not assume that the target structure exists yet.
   - `repository.ts`: Kysely, the only place with SQL.
   - Validation: the zod rules in `shared/schemas/` (`common.ts`, `inventory.ts`, `product-import.ts`), whose failures carry `{ field, reason }` codes.
   - `shared/csv.ts`: reads and writes CSV.
+- `server/src/modules/auth/` (R2.4b): first-run setup, sign-in, `me`, sign-out (same paths and responses as before). It owns sessions (`repository.ts`: 24 h, only the SHA-256 of the token is stored), password hashing (`passwords.ts`: async scrypt, `salt:hash`; hash before `withTransaction`, never inside) and the per-email lockout (`lockout.ts`). `requireAuth()` reads sessions through it; the legacy users routes and `scripts/create-admin.ts` call its `hashPassword`, `revokeAllSessionsForUser`, `clearLoginFailures` and `resolveAuthUserById`. Input rules: `shared/schemas/auth.ts` (also for the users module). A 429 is thrown as `TooManyRequestsError` (the error handler sets `Retry-After`).
 - `server/src/legacy/routes.ts`: every other API route, as in the old `server.ts` (validation, business logic and SQL inline). R2.4b moves them domain by domain into `server/src/modules/<domain>`.
-- `src/server/db.ts`: schema creation, ad-hoc `ALTER` "migrations", queries, sessions, password hashing. Demo data lives in `src/server/demo-data.ts`; only `npm run seed:dev` and the tests load it (R1.7).
+- `src/server/db.ts`: schema creation, ad-hoc `ALTER` "migrations", queries (sessions and password hashing moved to the auth module in R2.4b). Demo data lives in `src/server/demo-data.ts`; only `npm run seed:dev` and the tests load it (R1.7).
 - ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
 - `src/components/*View.tsx`: god components. `ReportsCenterView` is 3,206 lines and computes 25 reports in the browser.
@@ -148,7 +149,7 @@ These facts come from Hostinger's support pages. Design around them:
   - If `npm install` fails, Hostinger retries with `--legacy-peer-deps`.
   - Env vars are managed in hPanel (`SETUP_TOKEN` is set). There is no `.env` file. Optional: `TRUST_PROXY` (R1.9; unset = one proxy hop in production).
 - Resources: 2 CPU, 3 GB RAM, NPROC 120. A single Node process serves both the SPA and the API (same origin).
-- Rate limits (R1.9, `src/server/security.ts`) live in process memory, which works because there is one process. The per-email sign-in lockout is in the DB (`login_attempts`, `src/server/login-guard.ts`).
+- Rate limits (R1.9, `src/server/security.ts`) live in process memory, which works because there is one process. The per-email sign-in lockout is in the DB (`login_attempts`, `server/src/modules/auth/lockout.ts`).
 - Verified live on 2026-11-24: with `TRUST_PROXY=1` (the production default) the rate limiter sees the real client IP (IPv4, or the IPv6 /56) and ignores a spoofed `X-Forwarded-For`. Hostinger's CDN (`Server: hcdn`) adds its own `content-security-policy: upgrade-insecure-requests` header next to the app's CSP.
 - Still to verify during R8.1: whether SSH is available, the localhost MariaDB connection, and whether `mysqldump` works in cron.
 

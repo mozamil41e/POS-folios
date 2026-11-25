@@ -17,4 +17,7 @@ export const kysely = new Kysely<Database>({
   dialect: new SqliteDialect({ database: sqlite }),
 });
 
+/** What repositories take: `kysely` itself, or the `trx` of withTransaction(). */
+export type Executor = Kysely<Database>;
+
 export type { Database };
