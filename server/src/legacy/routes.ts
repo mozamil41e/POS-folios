@@ -6,12 +6,10 @@
  * starting with products/inventory (R2.4a); delete this file when empty.
  */
 import crypto from 'node:crypto';
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import {
-  categoryKey,
   createSessionForUser,
   db,
-  findOrCreateCategory,
   getAllCategories,
   getAllCustomers,
   getAllInvoices,
@@ -21,14 +19,12 @@ import {
   getAllSuppliers,
   getAllUsers,
   getAllVouchers,
-  getCategoryById,
   getHeldCarts,
   getOrganizationSettings,
   getPublicInvoiceByUuid,
   getRecentMovements,
   getRoleById,
   getRoleBySlug,
-  getUserBySessionToken,
   hasAnyUsers,
   hashPassword,
   resolveAuthUserById,
@@ -51,16 +47,8 @@ import {
   recordLoginFailure,
 } from '../../../src/server/login-guard.ts';
 import {
-  InputError,
-  parseCategoryInput,
-  parseCategoryOrder,
-  parseCategoryRef,
   parseCustomerInput,
-  parseMovementInput,
-  parseOpeningStock,
-  parseProductInput,
   parseSupplierInput,
-  type CategoryRef,
 } from '../../../src/server/input-rules.ts';
 import {
   noIndex,
@@ -68,7 +56,6 @@ import {
 } from '../../../src/server/security.ts';
 import type {
   AuthUser,
-  Category,
   Customer,
   FontSizeLevel,
   Invoice,
@@ -76,7 +63,6 @@ import type {
   InvoiceSubtype,
   InvoiceTypeCode,
   PaymentMethod,
-  PermissionKey,
   Product,
   Purchase,
   PurchasePaymentStatus,
@@ -85,6 +71,8 @@ import type {
   VoucherType,
 } from '../../../shared/types.ts';
 import type { AppConfig } from '../config/env.ts';
+import { requireAuth, requirePermission } from '../middleware/auth.ts';
+import { sendScoped } from '../shared/respond.ts';
 import { roundMoney } from '../../../shared/money.ts';
 import { DOCUMENT_TYPES, INVOICE_KINDS, PAYMENT_METHODS } from '../../../shared/constants.ts';
 
@@ -307,38 +295,8 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
   });
 
   // Require valid Bearer session token for all private /api routes
-  router.use('/api', (req: Request, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-    const user = getUserBySessionToken(token);
-    if (!user) {
-      res.status(401).json({ error: 'Authentication required.' });
-      return;
-    }
-    res.locals.authUser = user;
-    res.locals.authToken = token;
-    next();
-  });
-
-  function requirePermission(permission: PermissionKey) {
-    return (_req: Request, res: Response, next: NextFunction) => {
-      const authUser = res.locals.authUser as AuthUser | undefined;
-      if (!authUser || authUser.is_active === 0 || !authUser.permissions.includes(permission)) {
-        res.status(403).json({
-          error: 'You do not have permission to perform this action.',
-        });
-        return;
-      }
-      next();
-    };
-  }
-
-  // Every authenticated response that carries workspace data (lists, settings)
-  // goes through the read-scope filter (R1.3): no unreadable lists, no secrets,
-  // no cost prices for users without cost permission.
-  function sendScoped(res: Response, payload: Record<string, unknown>): void {
-    res.json(scopeForUser(res.locals.authUser as AuthUser, payload));
-  }
+  // (server/src/middleware/auth.ts; the modules use the same checks, R2.4a).
+  router.use('/api', requireAuth());
 
   router.get('/api/auth/me', (_req: Request, res: Response) => {
     res.json({ user: res.locals.authUser });
@@ -882,327 +840,7 @@ export function createLegacyRouter({ config, limiters }: LegacyContext): Router 
     sendScoped(res, { settings: getOrganizationSettings() });
   });
 
-  // Product CRUD
-  const SKU_EXISTS_RESPONSE = { error: 'SKU/Barcode already exists.', code: 'SKU_EXISTS', field: 'sku' };
-  const skuTaken = (sku: string, exceptId = 0) =>
-    Boolean(db.prepare('SELECT id FROM products WHERE sku = ? AND id != ?').get(sku, exceptId));
-
-  router.post('/api/products', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const b = req.body as Record<string, unknown>;
-    // R1.10 (SEC-19): every field validated; throws InputError -> 400 VALIDATION_FAILED.
-    const input = parseProductInput(b);
-    const stockQty = parseOpeningStock(b);
-    const categoryRef = parseCategoryRef(b);
-    const {
-      sku,
-      name_ar: nameAr,
-      name_en: nameEn,
-      unit_ar: unitAr,
-      unit_en: unitEn,
-      cost_price: costPrice,
-      sell_price: sellPrice,
-      tax_rate: taxRate,
-      tax_category: taxCategory,
-      min_stock_alert: minStockAlert,
-      expiry_date: expiryDate,
-    } = input;
-
-    if (skuTaken(sku)) {
-      res.status(409).json(SKU_EXISTS_RESPONSE);
-      return;
-    }
-
-    const now = new Date().toISOString();
-    try {
-      const createTx = db.transaction(() => {
-        // Inside the transaction: a category created by name is rolled back with a failed product.
-        const category = resolveProductCategory(categoryRef);
-        const info = db
-          .prepare(`
-            INSERT INTO products (
-              sku, name_ar, name_en, category_id, category_ar, category_en, unit_ar, unit_en,
-              cost_price, sell_price, tax_rate, tax_category, stock_qty, min_stock_alert,
-              expiry_date, active, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-          `)
-          .run(
-            sku,
-            nameAr,
-            nameEn,
-            category.id,
-            category.name_ar,
-            category.name_en,
-            unitAr,
-            unitEn,
-            costPrice,
-            sellPrice,
-            taxRate,
-            taxCategory,
-            stockQty,
-            minStockAlert,
-            expiryDate,
-            now,
-            now
-          );
-
-        if (stockQty > 0) {
-          db.prepare(`
-            INSERT INTO stock_movements (product_id, type, qty_delta, balance_after, reference_no, notes, created_at)
-            VALUES (?, 'purchase', ?, ?, 'NEW-SKU', 'إضافة صنف جديد للمخزون', ?)
-          `).run(info.lastInsertRowid, stockQty, stockQty, now);
-        }
-
-        return info.lastInsertRowid;
-      });
-
-      const id = createTx();
-      const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
-      sendScoped(res.status(201), {
-        product,
-        products: getAllProducts(),
-        categories: getAllCategories(),
-        movements: getRecentMovements(80),
-      });
-    } catch (err) {
-      // Two requests creating the same SKU at once: the UNIQUE index decides.
-      if (err instanceof Error && err.message.includes('UNIQUE')) {
-        res.status(409).json(SKU_EXISTS_RESPONSE);
-        return;
-      }
-      throw err;
-    }
-  });
-
-  router.put('/api/products/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Product | undefined;
-    if (!existing) {
-      res.status(404).json({ error: 'Product not found.' });
-      return;
-    }
-
-    // R1.10 (SEC-19): fields not sent keep their value; stock changes only through movements.
-    const b = req.body as Record<string, unknown>;
-    const input = parseProductInput(b, existing);
-    const categoryRef = parseCategoryRef(b);
-    if (skuTaken(input.sku, id)) {
-      res.status(409).json(SKU_EXISTS_RESPONSE);
-      return;
-    }
-    const now = new Date().toISOString();
-
-    db.transaction(() => {
-      const category = resolveProductCategory(categoryRef, existing);
-      db.prepare(`
-        UPDATE products
-        SET sku = ?, name_ar = ?, name_en = ?, category_id = ?, category_ar = ?, category_en = ?,
-            unit_ar = ?, unit_en = ?, cost_price = ?, sell_price = ?,
-            tax_rate = ?, tax_category = ?, min_stock_alert = ?, expiry_date = ?, updated_at = ?
-        WHERE id = ?
-      `).run(
-        input.sku,
-        input.name_ar,
-        input.name_en,
-        category.id,
-        category.name_ar,
-        category.name_en,
-        input.unit_ar,
-        input.unit_en,
-        input.cost_price,
-        input.sell_price,
-        input.tax_rate,
-        input.tax_category,
-        input.min_stock_alert,
-        input.expiry_date,
-        now,
-        id
-      );
-    })();
-
-    sendScoped(res, { products: getAllProducts(), categories: getAllCategories() });
-  });
-
-  router.delete('/api/products/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(id);
-    sendScoped(res, { products: getAllProducts(), categories: getAllCategories() });
-  });
-
-  // Product categories (R1.11c, option a approved by the owner).
-  /**
-   * The category a product is saved under: the one chosen by id, one found or
-   * created by Arabic name (older clients), the product's current one, or
-   * "عام / General" for a new product without any.
-   */
-  function resolveProductCategory(ref: CategoryRef, existing?: Product): Category {
-    if (ref && 'id' in ref) {
-      const category = getCategoryById(ref.id);
-      if (!category) throw new InputError('category_id', 'NOT_FOUND', 'Category not found.');
-      return category;
-    }
-    if (ref) return findOrCreateCategory(ref.name_ar, ref.name_en);
-    if (existing?.category_id) {
-      const current = getCategoryById(existing.category_id);
-      if (current) return current;
-    }
-    if (existing?.category_ar) return findOrCreateCategory(existing.category_ar, existing.category_en);
-    return findOrCreateCategory('عام', 'General');
-  }
-
-  const categoryNameTaken = (nameAr: string, exceptId = 0) =>
-    Boolean(db.prepare('SELECT id FROM categories WHERE name_key = ? AND id != ?').get(categoryKey(nameAr), exceptId));
-
-  const CATEGORY_EXISTS_RESPONSE = {
-    error: 'A category with this name already exists.',
-    code: 'CATEGORY_EXISTS',
-    field: 'name_ar',
-  };
-
-  router.post('/api/categories', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const input = parseCategoryInput(req.body as Record<string, unknown>);
-    if (categoryNameTaken(input.name_ar)) {
-      res.status(409).json(CATEGORY_EXISTS_RESPONSE);
-      return;
-    }
-    const category = findOrCreateCategory(input.name_ar, input.name_en);
-    sendScoped(res.status(201), { category, categories: getAllCategories() });
-  });
-
-  router.put('/api/categories/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = getCategoryById(id);
-    if (!existing) {
-      res.status(404).json({ error: 'Category not found.', code: 'CATEGORY_NOT_FOUND' });
-      return;
-    }
-    const input = parseCategoryInput(req.body as Record<string, unknown>, existing);
-    if (categoryNameTaken(input.name_ar, id)) {
-      res.status(409).json(CATEGORY_EXISTS_RESPONSE);
-      return;
-    }
-    const now = new Date().toISOString();
-    db.transaction(() => {
-      db.prepare('UPDATE categories SET name_ar = ?, name_en = ?, name_key = ?, updated_at = ? WHERE id = ?').run(
-        input.name_ar,
-        input.name_en,
-        categoryKey(input.name_ar),
-        now,
-        id
-      );
-      // A rename reaches every product of the category (their display copy).
-      db.prepare('UPDATE products SET category_ar = ?, category_en = ?, updated_at = ? WHERE category_id = ?').run(
-        input.name_ar,
-        input.name_en,
-        now,
-        id
-      );
-    })();
-    sendScoped(res, { categories: getAllCategories(), products: getAllProducts() });
-  });
-
-  router.post('/api/categories/order', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const ids = parseCategoryOrder(req.body as Record<string, unknown>);
-    const known = new Set(getAllCategories().map((c) => c.id));
-    if (ids.length !== known.size || !ids.every((id) => known.has(id))) {
-      res.status(400).json({
-        error: 'ids must list every category exactly once.',
-        code: 'VALIDATION_FAILED',
-        field: 'ids',
-        reason: 'INVALID_CHOICE',
-      });
-      return;
-    }
-    const setOrder = db.prepare('UPDATE categories SET sort_order = ? WHERE id = ?');
-    db.transaction(() => ids.forEach((id, index) => setOrder.run(index + 1, id)))();
-    sendScoped(res, { categories: getAllCategories() });
-  });
-
-  router.delete('/api/categories/:id', requirePermission('inventory.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = getCategoryById(id);
-    if (!existing) {
-      res.status(404).json({ error: 'Category not found.', code: 'CATEGORY_NOT_FOUND' });
-      return;
-    }
-    // Option (a): never leave active products without a category; move them first.
-    if (existing.product_count > 0) {
-      res.status(409).json({
-        error: `This category still has ${existing.product_count} product(s). Move them to another category first.`,
-        code: 'CATEGORY_IN_USE',
-        count: existing.product_count,
-      });
-      return;
-    }
-    // Hidden (deleted) products keep the old name as text; their link is cleared.
-    db.transaction(() => {
-      db.prepare('UPDATE products SET category_id = NULL WHERE category_id = ?').run(id);
-      db.prepare('DELETE FROM categories WHERE id = ?').run(id);
-    })();
-    sendScoped(res, { categories: getAllCategories() });
-  });
-
-  // Inventory movement (purchase / adjustment / return)
-  router.post('/api/inventory/movement', requirePermission('inventory.adjust'), (req: Request, res: Response) => {
-    // R1.10 (SEC-19): validated input; throws InputError -> 400 VALIDATION_FAILED.
-    const {
-      product_id: productId,
-      type,
-      qty,
-      notes,
-      reference_no: referenceNo,
-    } = parseMovementInput(req.body as Record<string, unknown>);
-
-    try {
-      const moveTx = db.transaction(() => {
-        const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId) as Product | undefined;
-        if (!product) {
-          throw new Error('PRODUCT_NOT_FOUND');
-        }
-
-        const delta = type === 'purchase' || type === 'return' ? Math.abs(qty) : qty;
-        const newBalance = product.stock_qty + delta;
-        // DB-11, owner's option (a): refuse instead of clamping at 0, so the
-        // ledger (sum of qty_delta) always equals the stock balance.
-        if (newBalance < 0) {
-          throw new Error(`INSUFFICIENT_STOCK:${product.stock_qty}`);
-        }
-        const now = new Date().toISOString();
-
-        db.prepare('UPDATE products SET stock_qty = ?, updated_at = ? WHERE id = ?').run(
-          newBalance,
-          now,
-          product.id
-        );
-
-        db.prepare(`
-          INSERT INTO stock_movements (product_id, type, qty_delta, balance_after, reference_no, notes, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(product.id, type, delta, newBalance, referenceNo, notes, now);
-      });
-
-      moveTx();
-      sendScoped(res, {
-        products: getAllProducts(),
-        movements: getRecentMovements(80),
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message === 'PRODUCT_NOT_FOUND') {
-        res.status(404).json({ error: 'Product not found.', code: 'PRODUCT_NOT_FOUND' });
-        return;
-      }
-      if (err instanceof Error && err.message.startsWith('INSUFFICIENT_STOCK:')) {
-        const available = Number(err.message.split(':')[1]);
-        res.status(400).json({
-          error: `Not enough stock: only ${available} available.`,
-          code: 'INSUFFICIENT_STOCK',
-          field: 'qty',
-          available,
-        });
-        return;
-      }
-      throw err;
-    }
-  });
+  // Products, stock movements and categories moved to server/src/modules/inventory (R2.4a).
 
   // Suppliers & Purchases CRUD
   router.post('/api/suppliers', requirePermission('purchases.manage'), (req: Request, res: Response) => {

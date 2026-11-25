@@ -4,6 +4,7 @@ import { createRateLimiters, resolveTrustProxy, securityHeaders } from '../../sr
 import { loadConfig, type AppConfig } from './config/env.ts';
 import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { createLegacyRouter } from './legacy/routes.ts';
+import { createInventoryRouter } from './modules/inventory/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { emptyBodyAsObject, requestId, requestLogger } from './middleware/request.ts';
 import { AppError } from './shared/errors.ts';
@@ -78,8 +79,9 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   // transaction is open (see server/src/db/transaction.ts).
   app.use(requestsWaitWhileTransactionOpen());
 
-  // Today's routes, moved as they were (strangler): R2.4 moves them into
-  // server/src/modules/<domain> one domain at a time.
+  // Modules first (R2.4, strangler): each authenticates its own routes.
+  app.use(createInventoryRouter());
+  // The routes not moved yet, as they were; R2.4b empties this router.
   app.use(createLegacyRouter({ config, limiters: createRateLimiters() }));
 
   const errorHandler = createErrorHandler(logger);

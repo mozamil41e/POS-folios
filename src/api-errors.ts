@@ -64,7 +64,16 @@ const REASONS: Record<string, Bilingual> = {
   INVALID_DATE: { ar: 'تاريخ غير صحيح', en: 'is not a valid date' },
   INVALID_CHOICE: { ar: 'قيمة غير مسموحة', en: 'is not an allowed value' },
   NOT_FOUND: { ar: 'غير موجود', en: 'was not found' },
+  DUPLICATE_IN_FILE: { ar: 'مكرر في نفس الملف', en: 'appears twice in the file' },
+  ALREADY_EXISTS: { ar: 'موجود مسبقاً في النظام', en: 'already exists in the system' },
 };
+
+/** The Arabic or English text of a validation reason (also used by the import preview). */
+export function reasonText(reason: string, lang: Language): string {
+  const text = REASONS[reason];
+  if (!text) return reason;
+  return lang === 'ar' ? text.ar : text.en;
+}
 
 export function describeApiError(body: ApiErrorBody | null | undefined, lang: Language): string | null {
   if (!body?.code) return null;
@@ -87,6 +96,10 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
           ? `لا يمكن حذف التصنيف: عليه ${body.count} صنف. انقلها إلى تصنيف آخر أولاً`
           : `Cannot delete: ${body.count} product(s) still use this category. Move them first`
         : null;
+    case 'IMPORT_INVALID':
+      return isAr
+        ? 'الملف فيه أخطاء، لم يُستورد أي صنف. راجع المعاينة وصحّح الملف'
+        : 'The file has problems; nothing was imported. Check the preview and fix the file';
     case 'INSUFFICIENT_STOCK':
       return typeof body.available === 'number'
         ? isAr

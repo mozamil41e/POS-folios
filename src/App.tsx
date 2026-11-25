@@ -19,6 +19,7 @@ import type {
 } from '../shared/types';
 import { translations } from './i18n';
 import { describeApiError, type ApiErrorBody } from './api-errors';
+import type { ImportReport } from '../shared/schemas/product-import';
 import { canViewCost, hasAnyPermission, hasPermission } from '../shared/permissions';
 import { AuthView } from './components/AuthView';
 import { PosTerminalView } from './components/PosTerminalView';
@@ -472,6 +473,26 @@ function PosWorkspace({
     mergeCatalog(body);
     notify(isAr ? 'تم تحديث بيانات الصنف' : 'Product updated');
     return true;
+  };
+
+  /**
+   * CSV import (R2.4a): `dryRun` asks for the preview report; otherwise all rows
+   * are added at once. A rejected file comes back as 400 IMPORT_INVALID.
+   */
+  const handleImportProducts = async (csv: string, dryRun: boolean): Promise<ImportReport | null> => {
+    const body = await callApi<
+      ImportReport & {
+        products?: BootstrapPayload['products'];
+        categories?: BootstrapPayload['categories'];
+        movements?: BootstrapPayload['movements'];
+      }
+    >('/api/products/import', jsonRequest('POST', { csv, dryRun }), 'Import failed');
+    if (!body) return null;
+    if (!dryRun) {
+      mergeCatalog(body);
+      notify(isAr ? `تم استيراد ${body.imported} صنف` : `${body.imported} products imported`);
+    }
+    return body;
   };
 
   // Product categories (R1.11c).
@@ -1068,6 +1089,8 @@ function PosWorkspace({
                 onUpdateCategory={handleUpdateCategory}
                 onDeleteCategory={handleDeleteCategory}
                 onReorderCategories={handleReorderCategories}
+                onPreviewImport={(csv) => handleImportProducts(csv, true)}
+                onImportProducts={(csv) => handleImportProducts(csv, false)}
               />
             )}
 

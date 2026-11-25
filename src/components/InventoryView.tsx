@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
-import { ArrowDownUp, Edit3, PackagePlus, Search, X } from 'lucide-react';
+import { ArrowDownUp, Edit3, FileSpreadsheet, PackagePlus, Search, Upload, X } from 'lucide-react';
 import type { AuthUser, Category, Language, Product, StockMovement } from '../../shared/types';
+import type { ImportReport } from '../../shared/schemas/product-import';
 import { formatDateTime, formatMoney, translations } from '../i18n';
 import { hasPermission } from '../../shared/permissions';
 import { CategoriesPanel, type CategoryHandlers } from './CategoriesPanel';
+import { ProductImport, downloadImportTemplate } from './ProductImport';
 import { TablePagination, useTablePagination } from './TablePagination';
 import { roundMoney } from '../../shared/money';
 
@@ -28,6 +30,9 @@ interface InventoryViewProps extends CategoryHandlers {
     qty: number;
     notes: string;
   }) => Promise<boolean>;
+  /** CSV import (R2.4a): preview, then import; the buttons show only when both are given. */
+  onPreviewImport?: (csv: string) => Promise<ImportReport | null>;
+  onImportProducts?: (csv: string) => Promise<ImportReport | null>;
 }
 
 export function InventoryView({
@@ -41,6 +46,8 @@ export function InventoryView({
   onCreateProduct,
   onUpdateProduct,
   onStockMovement,
+  onPreviewImport,
+  onImportProducts,
   ...categoryHandlers
 }: InventoryViewProps) {
   const t = translations[lang];
@@ -53,6 +60,7 @@ export function InventoryView({
   const [tab, setTab] = useState<'catalog' | 'movements' | 'categories'>('catalog');
   const [quickCategory, setQuickCategory] = useState('');
   const [addingCategory, setAddingCategory] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState('');
   const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out'>('all');
 
@@ -230,16 +238,47 @@ export function InventoryView({
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{t.invSubtitle}</p>
         </div>
         {canManageProducts && (
-          <button
-            type="button"
-            onClick={openNewProductModal}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 self-start"
-          >
-            <PackagePlus className="w-4 h-4" />
-            {t.addProduct}
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start">
+            {onPreviewImport && onImportProducts && (
+              <>
+                <button
+                  type="button"
+                  onClick={downloadImportTemplate}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  {isAr ? 'تحميل نموذج CSV' : 'CSV Template'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowImport(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0"
+                >
+                  <Upload className="w-4 h-4" />
+                  {isAr ? 'استيراد من CSV' : 'Import CSV'}
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={openNewProductModal}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <PackagePlus className="w-4 h-4" />
+              {t.addProduct}
+            </button>
+          </div>
         )}
       </div>
+
+      {showImport && onPreviewImport && onImportProducts && (
+        <ProductImport
+          lang={lang}
+          onPreview={onPreviewImport}
+          onImport={onImportProducts}
+          onClose={() => setShowImport(false)}
+        />
+      )}
 
       {/* Clean Single-Elevation KPI Strip */}
       <div

@@ -87,7 +87,13 @@ Production always starts empty (R1.7): no demo products, customers or invoices, 
 Do not assume that the target structure exists yet.
 
 - `server/src/` (R2.1): `main.ts` validates the environment (`config/env.ts`, zod; production refuses to start without `SETUP_TOKEN`), then serves Vite (dev) or `dist/` (production). `app.ts` builds the app: request id, request log, helmet, JSON body, the routes, and the central error handler (`AppError` from `shared/errors.ts` keeps its status and code; anything else is logged and answered 500 `INTERNAL` with the request id).
-- `server/src/legacy/routes.ts`: every API route as it was in the old `server.ts` (validation, business logic and SQL inline). R2.4 moves them domain by domain into `server/src/modules/<domain>`, products/inventory first (R2.4a).
+- `server/src/modules/inventory/` (R2.4a, the first module and the pattern for the others):
+  - `routes.ts`: products, stock movements, categories, CSV import. Mounted before the legacy router; each route calls `requireAuth()` + `requirePermission()` from `server/src/middleware/auth.ts`.
+  - `service.ts` and `import.ts`: the rules. Writes go through `withTransaction`.
+  - `repository.ts`: Kysely, the only place with SQL.
+  - Validation: the zod rules in `shared/schemas/` (`common.ts`, `inventory.ts`, `product-import.ts`), whose failures carry `{ field, reason }` codes.
+  - `shared/csv.ts`: reads and writes CSV.
+- `server/src/legacy/routes.ts`: every other API route, as in the old `server.ts` (validation, business logic and SQL inline). R2.4b moves them domain by domain into `server/src/modules/<domain>`.
 - `src/server/db.ts`: schema creation, ad-hoc `ALTER` "migrations", queries, sessions, password hashing. Demo data lives in `src/server/demo-data.ts`; only `npm run seed:dev` and the tests load it (R1.7).
 - ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
