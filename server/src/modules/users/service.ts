@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { ALL_PERMISSION_KEYS } from '../../../../shared/permissions.ts';
-import type { Parsed, Raw } from '../../../../shared/schemas/common.ts';
+import type { Raw } from '../../../../shared/schemas/common.ts';
 import {
   parseNewRole,
   parseNewUser,
@@ -12,6 +12,7 @@ import type { AuthUser, RoleRecord } from '../../../../shared/types.ts';
 import { kysely, type Executor } from '../../db/kysely.ts';
 import { withTransaction } from '../../db/transaction.ts';
 import { AppError, ConflictError, NotFoundError, ValidationError } from '../../shared/errors.ts';
+import { valueOrThrow } from '../../shared/validation.ts';
 import {
   accountInputOrThrow,
   clearLoginFailures,
@@ -157,12 +158,6 @@ export async function deleteUser(id: number, actor: AuthUser): Promise<void> {
 
 // ---------------------------------------------------------------- roles
 
-function roleInputOrThrow<T>(parsed: Parsed<T>): T {
-  if (parsed.ok) return parsed.value;
-  const first = parsed.problems[0];
-  throw new ValidationError(first.field, first.reason, first.message);
-}
-
 /** Slug from the English name plus 4 random hex characters, as before. */
 function roleSlug(nameEn: string): string {
   const base =
@@ -174,7 +169,7 @@ function roleSlug(nameEn: string): string {
 }
 
 export async function createRole(raw: Raw): Promise<number> {
-  const input = roleInputOrThrow(parseNewRole(raw));
+  const input = valueOrThrow(parseNewRole(raw));
   return withTransaction((trx) =>
     repo.roles.insert(trx, {
       slug: roleSlug(input.name_en),
@@ -191,7 +186,7 @@ export async function createRole(raw: Raw): Promise<number> {
 export async function updateRole(id: number, raw: Raw): Promise<void> {
   const role = await repo.roles.findById(kysely, id);
   if (!role) throw roleNotFound();
-  const input = roleInputOrThrow(parseRoleUpdate(raw, role));
+  const input = valueOrThrow(parseRoleUpdate(raw, role));
   // The administrator role always keeps every permission.
   const permissions = role.slug === 'admin' ? [...ALL_PERMISSION_KEYS] : (input.permissions ?? role.permissions);
   await withTransaction((trx) =>

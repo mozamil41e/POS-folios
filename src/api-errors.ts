@@ -39,6 +39,15 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   email: { ar: 'البريد الإلكتروني', en: 'Email' },
   full_name: { ar: 'الاسم الكامل', en: 'Full name' },
   role_id: { ar: 'الدور الوظيفي', en: 'Role' },
+  street_ar: { ar: 'الشارع', en: 'Street' },
+  building_no: { ar: 'رقم المبنى', en: 'Building number' },
+  city_ar: { ar: 'المدينة', en: 'City' },
+  postal_code: { ar: 'الرمز البريدي', en: 'Postal code' },
+  public_base_url: { ar: 'رابط الفاتورة العامة', en: 'Public invoice link' },
+  thermal_width_mm: { ar: 'عرض ورق الطابعة', en: 'Paper width' },
+  auto_print_receipt: { ar: 'الطباعة التلقائية', en: 'Auto print' },
+  font_size: { ar: 'حجم الخط', en: 'Font size' },
+  table_page_size: { ar: 'عدد صفوف الجدول', en: 'Rows per page' },
   address_ar: { ar: 'العنوان', en: 'Address' },
   type: { ar: 'نوع الحركة', en: 'Movement type' },
   qty: { ar: 'الكمية', en: 'Quantity' },
@@ -69,6 +78,7 @@ const REASONS: Record<string, Bilingual> = {
   NOT_FOUND: { ar: 'غير موجود', en: 'was not found' },
   DUPLICATE_IN_FILE: { ar: 'مكرر في نفس الملف', en: 'appears twice in the file' },
   ALREADY_EXISTS: { ar: 'موجود مسبقاً في النظام', en: 'already exists in the system' },
+  INVALID_URL: { ar: 'رابط غير صحيح، يبدأ بـ https:// أو http://', en: 'must be a link starting with https:// or http://' },
 };
 
 /** The Arabic or English text of a validation reason (also used by the import preview). */

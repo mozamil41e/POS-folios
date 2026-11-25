@@ -55,6 +55,15 @@ describe('describeApiError (R1.10)', () => {
     );
   });
 
+  it('explains settings errors (R2.4b)', () => {
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'public_base_url', reason: 'INVALID_URL' }, 'ar')).toBe(
+      'رابط الفاتورة العامة: رابط غير صحيح، يبدأ بـ https:// أو http://'
+    );
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'thermal_width_mm', reason: 'INVALID_CHOICE' }, 'en')).toBe(
+      'Paper width is not an allowed value'
+    );
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

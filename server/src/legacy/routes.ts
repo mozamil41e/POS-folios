@@ -3,8 +3,8 @@
  * here unchanged except for: Express 5 (no asyncHandler wrapper), the router
  * instead of the app.
  * Strangler: R2.4 moves each domain out into server/src/modules/<domain>:
- * products/inventory (R2.4a), then auth (R2.4b: setup, sign-in, sessions)
- * and users/roles (R2.4b); delete this file when empty.
+ * products/inventory (R2.4a), then auth (R2.4b: setup, sign-in, sessions),
+ * users/roles and settings (R2.4b); delete this file when empty.
  */
 import crypto from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
@@ -26,6 +26,7 @@ import { canViewData, type VisibleDataKey } from '../../../shared/permissions.ts
 import { scopeForUser } from '../../../src/server/visibility.ts';
 import { isValidVatNumber } from '../../../shared/validation.ts';
 import { nextDocumentNumber } from '../../../src/server/sequences.ts';
+import { getSettings } from '../modules/settings/service.ts';
 import { lists as usersLists } from '../modules/users/service.ts';
 import {
   parseCustomerInput,
@@ -38,7 +39,6 @@ import {
 import type {
   AuthUser,
   Customer,
-  FontSizeLevel,
   Invoice,
   InvoiceItem,
   InvoiceSubtype,
@@ -98,7 +98,7 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
     const canManageUsers = authUser.permissions.includes('users.manage');
     res.json(
       scopeForUser(authUser, {
-        settings: getOrganizationSettings(),
+        settings: await getSettings(),
         products: can('products') ? getAllProducts() : undefined,
         categories: can('categories') ? getAllCategories() : undefined,
         customers: can('customers') ? getAllCustomers() : undefined,
@@ -211,110 +211,6 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
 
     const vouchers = getAllVouchers();
     res.json({ voucher: vouchers.find((v) => v.id === id), vouchers });
-  });
-
-  // Organization (store) and thermal-print settings
-  router.put('/api/settings', requirePermission('settings.manage'), (req: Request, res: Response) => {
-    const body = req.body as Record<string, unknown>;
-    const current = getOrganizationSettings();
-
-    const nameAr = String(body.name_ar ?? current.name_ar).trim();
-    const nameEn = String(body.name_en ?? current.name_en).trim();
-    const vatNumber = String(body.vat_number ?? current.vat_number).trim();
-    const crNumber = String(body.cr_number ?? current.cr_number).trim();
-    const streetAr = String(body.street_ar ?? current.street_ar).trim();
-    const buildingNo = String(body.building_no ?? current.building_no).trim();
-    const cityAr = String(body.city_ar ?? current.city_ar).trim();
-    const postalCode = String(body.postal_code ?? current.postal_code).trim();
-    const thermalWidthMm =
-      body.thermal_width_mm === undefined
-        ? current.thermal_width_mm
-        : Number(body.thermal_width_mm) === 58
-        ? 58
-        : 80;
-    const autoPrintReceipt =
-      body.auto_print_receipt === undefined
-        ? current.auto_print_receipt
-        : body.auto_print_receipt === true ||
-          body.auto_print_receipt === 1 ||
-          body.auto_print_receipt === '1'
-        ? 1
-        : 0;
-    const fontSize: FontSizeLevel =
-      body.font_size === 'small' || body.font_size === 'large'
-        ? body.font_size
-        : body.font_size === 'medium'
-        ? 'medium'
-        : current.font_size === 'small' || current.font_size === 'large'
-        ? current.font_size
-        : 'medium';
-    const rawPageSize = Number(body.table_page_size);
-    const allowedPageSizes = [5, 10, 20, 50];
-    const tablePageSize =
-      body.table_page_size === undefined
-        ? current.table_page_size || 10
-        : allowedPageSizes.includes(rawPageSize)
-        ? rawPageSize
-        : 10;
-
-    let publicBaseUrl =
-      body.public_base_url === undefined
-        ? current.public_base_url
-        : String(body.public_base_url).trim().replace(/\/+$/, '');
-
-    if (publicBaseUrl) {
-      try {
-        const parsed = new URL(publicBaseUrl);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-          res.status(400).json({ error: 'Public Base URL must use http:// or https://' });
-          return;
-        }
-        publicBaseUrl = parsed.origin + parsed.pathname.replace(/\/+$/, '');
-      } catch {
-        res.status(400).json({ error: 'Invalid Public Base URL format.' });
-        return;
-      }
-    }
-
-    if (!nameAr || !vatNumber) {
-      res.status(400).json({ error: 'Store name and VAT number are required.' });
-      return;
-    }
-    // R1.10 (owner approved): the restaurant's own VAT number goes on every receipt.
-    if (!isValidVatNumber(vatNumber)) {
-      res.status(400).json({
-        error: 'VAT number must be 15 digits starting and ending with 3.',
-        code: 'VALIDATION_FAILED',
-        field: 'vat_number',
-        reason: 'INVALID_VAT',
-      });
-      return;
-    }
-
-    db.prepare(`
-      UPDATE organization_settings
-      SET name_ar = ?, name_en = ?, vat_number = ?, cr_number = ?,
-          street_ar = ?, building_no = ?, city_ar = ?, postal_code = ?,
-          public_base_url = ?,
-          thermal_width_mm = ?, auto_print_receipt = ?, font_size = ?, table_page_size = ?
-      WHERE id = 1
-    `).run(
-      nameAr,
-      nameEn,
-      vatNumber,
-      crNumber,
-      streetAr,
-      buildingNo,
-      cityAr,
-      postalCode,
-      publicBaseUrl,
-      thermalWidthMm,
-      autoPrintReceipt,
-      fontSize,
-      tablePageSize
-    );
-
-    sendScoped(res, { settings: getOrganizationSettings() });
   });
 
   // Products, stock movements and categories moved to server/src/modules/inventory (R2.4a).

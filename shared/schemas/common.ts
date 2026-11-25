@@ -24,6 +24,7 @@ export const INPUT_REASONS = [
   'NOT_FOUND',
   'DUPLICATE_IN_FILE',
   'ALREADY_EXISTS',
+  'INVALID_URL',
 ] as const;
 
 export type InputReason = (typeof INPUT_REASONS)[number];
@@ -44,6 +45,12 @@ export const INPUT_LIMITS = {
   phone: 30,
   email: 160,
   address: 300,
+  // Restaurant settings, national address parts (R2.4b, owner's option a: lengths only).
+  street: 120,
+  city: 60,
+  buildingNo: 20,
+  postalCode: 20,
+  url: 300,
   notes: 300,
   reference: 60,
   maxAmount: 1_000_000,

@@ -7,11 +7,11 @@ import {
   parseOpeningStock,
   parseProduct,
   type CategoryRef,
-  type Parsed,
 } from '../../../../shared/schemas/inventory.ts';
 import { kysely } from '../../db/kysely.ts';
 import { withTransaction } from '../../db/transaction.ts';
 import { AppError, ConflictError, NotFoundError, ValidationError } from '../../shared/errors.ts';
+import { valueOrThrow } from '../../shared/validation.ts';
 import * as repo from './repository.ts';
 
 /**
@@ -21,12 +21,8 @@ import * as repo from './repository.ts';
  */
 type Raw = Record<string, unknown>;
 
-/** The first problem of a parse, as a 400 VALIDATION_FAILED. */
-export function valueOrThrow<T>(parsed: Parsed<T>): T {
-  if (parsed.ok) return parsed.value;
-  const first = parsed.problems[0];
-  throw new ValidationError(first.field, first.reason, first.message);
-}
+/** The first problem of a parse, as a 400 VALIDATION_FAILED (shared by the modules since R2.4b). */
+export { valueOrThrow };
 
 const skuExists = () => new ConflictError('SKU_EXISTS', 'SKU/Barcode already exists.', { field: 'sku' });
 const productNotFound = () => new NotFoundError('PRODUCT_NOT_FOUND', 'Product not found.');
