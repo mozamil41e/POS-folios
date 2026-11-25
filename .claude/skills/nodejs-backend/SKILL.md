@@ -107,7 +107,8 @@ export const validate = (s: { body?: ZodTypeAny; query?: ZodTypeAny; params?: Zo
 - There is no self-registration. `POST /auth/setup` only works when the users table is empty **and** `SETUP_TOKEN` matches.
 
 ## Transactions & concurrency
-- Every multi-table write goes inside `db.transaction().execute(async (trx) => …)`, and the service passes `trx` to the repositories.
+- Every multi-table write goes inside `withTransaction(async (trx) => …)` (`server/src/db/transaction.ts`, R2.3), and the service passes `trx` to the repositories. Do not nest it.
+- **SQLite rule until R3 (one shared connection):** a transaction body contains database work only. Hash passwords, call APIs or wait on timers *before* it starts. A violation is rolled back (`TransactionSpanError`) and requests arriving meanwhile get 503 `SERVER_BUSY`; `tests/api/data-layer.test.ts` shows both.
 - With MariaDB, requests interleave. Lock stock before reading balances:
 ```ts
 const items = await trx.selectFrom('inventory_items')

@@ -2,6 +2,7 @@ import express, { type ErrorRequestHandler, type Express } from 'express';
 import { initDatabase } from '../../src/server/db.ts';
 import { createRateLimiters, resolveTrustProxy, securityHeaders } from '../../src/server/security.ts';
 import { loadConfig, type AppConfig } from './config/env.ts';
+import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { createLegacyRouter } from './legacy/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { emptyBodyAsObject, requestId, requestLogger } from './middleware/request.ts';
@@ -73,6 +74,9 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(securityHeaders);
   app.use(express.json({ limit: '2mb' }));
   app.use(emptyBodyAsObject());
+  // R2.3: never let a request touch the shared SQLite connection while a
+  // transaction is open (see server/src/db/transaction.ts).
+  app.use(requestsWaitWhileTransactionOpen());
 
   // Today's routes, moved as they were (strangler): R2.4 moves them into
   // server/src/modules/<domain> one domain at a time.

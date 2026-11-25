@@ -55,7 +55,7 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 | Frontend | React 19, Vite 8, Tailwind 4, lucide-react, qrcode | + React Router, TanStack Query, shared UI kit, typed i18n |
 | Backend | Express ^5 (R2.1): `server/src/app.ts` (`createApp`), `main.ts` (entry), routes still in `server/src/legacy/routes.ts` | Express 5 modular monolith (`server/src/modules/*`) |
 | Validation | Manual `String(b.x ?? '')` checks | zod schemas in `shared/schemas` |
-| Data access | better-sqlite3 (sync), inline SQL | Kysely, first on SQLite, then **MariaDB via mysql2** |
+| Data access | Legacy routes: better-sqlite3 (sync), inline SQL. New modules (R2.3): Kysely 0.29 (`server/src/db/kysely.ts`) on the same connection, table types in `server/src/db/schema.ts`, writes through `withTransaction()` (`server/src/db/transaction.ts`) | Kysely on **MariaDB via mysql2** (R3) |
 | Database | SQLite file in `./data` | **MariaDB** (Hostinger; MySQL-compatible SQL only) |
 | Auth | Bearer token held in React state | httpOnly cookie session + CSRF |
 | Logging | pino JSON on stdout, one line per API request with `X-Request-Id`, credentials redacted (R2.1) | + optional Sentry |
