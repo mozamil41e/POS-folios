@@ -81,6 +81,14 @@ describe('describeApiError (R1.10)', () => {
     expect(describeApiError({ code: 'PURCHASE_NOT_FOUND' }, 'ar')).toBe('فاتورة الشراء غير موجودة');
   });
 
+  it('explains voucher errors (R2.4b)', () => {
+    expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'voucher_date', reason: 'FUTURE_DATE' }, 'ar')).toBe(
+      'تاريخ السند: لا يمكن أن يكون بعد اليوم'
+    );
+    expect(describeApiError({ code: 'ALREADY_VOID' }, 'ar')).toBe('هذا السند ملغى مسبقاً');
+    expect(describeApiError({ code: 'VOID_REASON_REQUIRED' }, 'en')).toBe('Enter a reason for voiding (3 to 300 characters)');
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

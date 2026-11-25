@@ -9,18 +9,14 @@
 //   INSERT INTO document_sequences (doc_type, period_year, last_value) VALUES (?, ?, LAST_INSERT_ID(1))
 //   ON DUPLICATE KEY UPDATE last_value = LAST_INSERT_ID(last_value + 1);  then  SELECT LAST_INSERT_ID();
 import type Database from 'better-sqlite3';
+import { riyadhYear } from '../../shared/dates.ts';
 
 export type DocumentType = 'INV' | 'CN' | 'PO' | 'RCV' | 'PAY';
 
 const DOCUMENT_TYPES: ReadonlySet<string> = new Set(['INV', 'CN', 'PO', 'RCV', 'PAY']);
 
-/** Saudi Arabia is UTC+3 all year (no daylight saving). */
-const RIYADH_OFFSET_MS = 3 * 60 * 60 * 1000;
-
-/** Calendar year of `date` in Asia/Riyadh — documents are numbered per local year. */
-export function riyadhYear(date: Date = new Date()): number {
-  return new Date(date.getTime() + RIYADH_OFFSET_MS).getUTCFullYear();
-}
+/** Calendar year in Asia/Riyadh — documents are numbered per local year (shared/dates.ts since R2.4b). */
+export { riyadhYear };
 
 export function formatDocumentNumber(type: DocumentType, year: number, value: number): string {
   return `${type}-${year}-${String(value).padStart(5, '0')}`;

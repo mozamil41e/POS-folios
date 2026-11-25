@@ -25,6 +25,7 @@ export const INPUT_REASONS = [
   'DUPLICATE_IN_FILE',
   'ALREADY_EXISTS',
   'INVALID_URL',
+  'FUTURE_DATE',
 ] as const;
 
 export type InputReason = (typeof INPUT_REASONS)[number];

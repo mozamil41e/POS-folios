@@ -10,7 +10,6 @@ import type {
   PermissionKey,
   Product,
   StockMovement,
-  Voucher,
 } from '../../shared/types.ts';
 import { ALL_PERMISSION_KEYS } from '../../shared/permissions.ts';
 import { syncDocumentSequences } from './sequences.ts';
@@ -529,13 +528,6 @@ export function getHeldCarts(): HeldCart[] {
     .all() as HeldCart[];
 }
 
-export function getAllVouchers(): Voucher[] {
-  return db
-    .prepare('SELECT * FROM vouchers ORDER BY voucher_date DESC, id DESC LIMIT 300')
-    .all() as Voucher[];
-}
-
-/** Invoice line as shown on the public page: no internal ids (R1.9). */
 export type PublicInvoiceItem = Pick<
   InvoiceItem,
   | 'sku'

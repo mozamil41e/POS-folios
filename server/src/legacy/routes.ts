@@ -14,7 +14,6 @@ import {
   getAllCategories,
   getAllInvoices,
   getAllProducts,
-  getAllVouchers,
   getHeldCarts,
   getOrganizationSettings,
   getPublicInvoiceByUuid,
@@ -29,6 +28,7 @@ import { lists as purchasesLists } from '../modules/purchases/service.ts';
 import { getSettings } from '../modules/settings/service.ts';
 import { lists as suppliersLists } from '../modules/suppliers/service.ts';
 import { lists as usersLists } from '../modules/users/service.ts';
+import { lists as vouchersLists } from '../modules/vouchers/service.ts';
 import {
   noIndex,
   type RateLimiters,
@@ -41,8 +41,6 @@ import type {
   InvoiceTypeCode,
   PaymentMethod,
   Product,
-  VoucherChannel,
-  VoucherType,
 } from '../../../shared/types.ts';
 import { requireAuth, requirePermission } from '../middleware/auth.ts';
 import { sendScoped } from '../shared/respond.ts';
@@ -100,110 +98,10 @@ export function createLegacyRouter({ limiters }: LegacyContext): Router {
         invoices: can('invoices') ? getAllInvoices() : undefined,
         movements: can('movements') ? getRecentMovements(80) : undefined,
         heldCarts: can('heldCarts') ? getHeldCarts() : undefined,
-        vouchers: can('vouchers') ? getAllVouchers() : undefined,
+        vouchers: can('vouchers') ? await vouchersLists.vouchers() : undefined,
         ...(canManageUsers ? { users: await usersLists.users(), roles: await usersLists.roles() } : {}),
       })
     );
-  });
-
-  router.post('/api/vouchers', requirePermission('vouchers.manage'), (req: Request, res: Response) => {
-    const b = req.body as Record<string, unknown>;
-    const voucherType: VoucherType = b.voucher_type === 'payment' ? 'payment' : 'receipt';
-    const paymentChannel: VoucherChannel = b.payment_channel === 'bank' ? 'bank' : 'cash';
-    const partyName = String(b.party_name ?? '').trim();
-    const category = String(b.category ?? '').trim();
-    const notes = String(b.notes ?? '').trim();
-    const amount = Number(b.amount ?? 0);
-    const rawDate = String(b.voucher_date ?? '').trim();
-    const voucherDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
-      ? rawDate
-      : new Date().toISOString().slice(0, 10);
-
-    if (!partyName) {
-      res.status(400).json({ error: 'Party or description name is required.' });
-      return;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      res.status(400).json({ error: 'Voucher amount must be greater than zero.' });
-      return;
-    }
-
-    const now = new Date().toISOString();
-
-    // Number and row are written in one transaction (R1.8): no duplicates, no gaps on failure.
-    const voucherId = db.transaction(() => {
-      const voucherNumber = nextDocumentNumber(db, voucherType === 'receipt' ? 'RCV' : 'PAY');
-      const info = db
-        .prepare(`
-          INSERT INTO vouchers (
-            voucher_number, voucher_type, payment_channel, party_name, category,
-            amount, notes, voucher_date, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `)
-        .run(
-          voucherNumber,
-          voucherType,
-          paymentChannel,
-          partyName,
-          category || (voucherType === 'receipt' ? 'إيرادات أخرى' : 'مصروفات تشغيلية'),
-          roundMoney(amount),
-          notes,
-          voucherDate,
-          now
-        );
-      return Number(info.lastInsertRowid);
-    })();
-
-    const vouchers = getAllVouchers();
-    res.status(201).json({
-      voucher: vouchers.find((v) => v.id === voucherId),
-      vouchers,
-    });
-  });
-
-  // Financial vouchers are never deleted (R1.8, SEC-17): they are voided with a reason.
-  router.delete('/api/vouchers/:id', requirePermission('vouchers.manage'), (_req: Request, res: Response) => {
-    res.status(405).json({
-      error: 'Vouchers cannot be deleted. Void the voucher with a reason instead.',
-      code: 'VOUCHER_DELETE_NOT_ALLOWED',
-    });
-  });
-
-  router.post('/api/vouchers/:id/void', requirePermission('vouchers.manage'), (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const authUser = res.locals.authUser as AuthUser;
-    const reason = String((req.body as Record<string, unknown>).reason ?? '').trim();
-
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: 'Invalid voucher ID.', code: 'INVALID_ID' });
-      return;
-    }
-    if (reason.length < 3 || reason.length > 300) {
-      res.status(400).json({
-        error: 'A reason of 3 to 300 characters is required to void a voucher.',
-        code: 'VOID_REASON_REQUIRED',
-      });
-      return;
-    }
-
-    const voucher = db.prepare('SELECT id, status FROM vouchers WHERE id = ?').get(id) as
-      | { id: number; status: string }
-      | undefined;
-    if (!voucher) {
-      res.status(404).json({ error: 'Voucher not found.', code: 'NOT_FOUND' });
-      return;
-    }
-    if (voucher.status === 'void') {
-      res.status(409).json({ error: 'This voucher is already void.', code: 'ALREADY_VOID' });
-      return;
-    }
-
-    db.prepare(`
-      UPDATE vouchers SET status = 'void', void_reason = ?, voided_at = ?, voided_by = ? WHERE id = ?
-    `).run(reason, new Date().toISOString(), authUser.id, id);
-
-    const vouchers = getAllVouchers();
-    res.json({ voucher: vouchers.find((v) => v.id === id), vouchers });
   });
 
   // Products, stock movements and categories moved to server/src/modules/inventory (R2.4a).

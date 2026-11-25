@@ -43,10 +43,16 @@ describe('vouchers (characterization)', () => {
     expect((await create(voucher({ amount: 0 }))).status).toBe(400);
   });
 
-  it("falls back to today's date when the date is invalid", async () => {
+  // Changed in R2.4b by the owner's decision (a): an invalid date used to fall
+  // back to today silently; it is now refused. Without a date, today is used.
+  it('refuses an invalid date, and uses today when none is sent', async () => {
     const res = await create(voucher({ voucher_date: 'not-a-date' }));
-    expect(res.status).toBe(201);
-    expect(res.body.voucher.voucher_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'VALIDATION_FAILED', field: 'voucher_date', reason: 'INVALID_DATE' });
+
+    const noDate = await create(voucher({ voucher_date: '' }));
+    expect(noDate.status).toBe(201);
+    expect(noDate.body.voucher.voucher_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   // SEC-17 fixed in R1.8: vouchers are never deleted.

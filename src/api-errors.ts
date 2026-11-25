@@ -64,6 +64,12 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   amount: { ar: 'المبلغ', en: 'Amount' },
   product_id: { ar: 'الصنف', en: 'Product' },
   unit_cost: { ar: 'سعر الوحدة', en: 'Unit cost' },
+  party_name: { ar: 'اسم الطرف أو البيان', en: 'Party or description' },
+  voucher_date: { ar: 'تاريخ السند', en: 'Voucher date' },
+  voucher_type: { ar: 'نوع السند', en: 'Voucher type' },
+  payment_channel: { ar: 'طريقة الدفع', en: 'Payment channel' },
+  category: { ar: 'التصنيف', en: 'Category' },
+  reason: { ar: 'السبب', en: 'Reason' },
 };
 
 const REASONS: Record<string, Bilingual> = {
@@ -87,6 +93,7 @@ const REASONS: Record<string, Bilingual> = {
   NOT_FOUND: { ar: 'غير موجود', en: 'was not found' },
   DUPLICATE_IN_FILE: { ar: 'مكرر في نفس الملف', en: 'appears twice in the file' },
   ALREADY_EXISTS: { ar: 'موجود مسبقاً في النظام', en: 'already exists in the system' },
+  FUTURE_DATE: { ar: 'لا يمكن أن يكون بعد اليوم', en: 'cannot be after today' },
   INVALID_URL: { ar: 'رابط غير صحيح، يبدأ بـ https:// أو http://', en: 'must be a link starting with https:// or http://' },
 };
 
@@ -123,6 +130,15 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
         ? 'الملف فيه أخطاء، لم يُستورد أي صنف. راجع المعاينة وصحّح الملف'
         : 'The file has problems; nothing was imported. Check the preview and fix the file';
     // Customers and suppliers (R2.4b); CUSTOMER_NOT_FOUND also comes from the checkout.
+    // Cash vouchers (R1.8 codes, Arabic texts since R2.4b)
+    case 'VOID_REASON_REQUIRED':
+      return isAr ? 'اكتب سبب الإلغاء (من 3 إلى 300 حرف)' : 'Enter a reason for voiding (3 to 300 characters)';
+    case 'ALREADY_VOID':
+      return isAr ? 'هذا السند ملغى مسبقاً' : 'This voucher is already void';
+    case 'VOUCHER_DELETE_NOT_ALLOWED':
+      return isAr ? 'لا تُحذف السندات. ألغِ السند مع ذكر السبب' : 'Vouchers cannot be deleted. Void it with a reason';
+    case 'NOT_FOUND':
+      return isAr ? 'العنصر المطلوب غير موجود' : 'The requested item was not found';
     // Purchases (R2.4b): the line number and the field of the problem.
     case 'INVALID_PURCHASE_LINE': {
       const label = body.field ? FIELD_LABELS[body.field] : undefined;

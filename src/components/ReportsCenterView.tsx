@@ -33,6 +33,7 @@ import type {
 } from '../../shared/types';
 import { formatDateTime, formatMoney } from '../i18n';
 import { hasPermission } from '../../shared/permissions';
+import { riyadhToday } from '../../shared/dates';
 import { TablePagination, useTablePagination } from './TablePagination';
 
 export type ReportCategoryId =
@@ -237,7 +238,8 @@ export function ReportsCenterView({
     category: '',
     amount: '',
     notes: '',
-    voucher_date: new Date().toISOString().slice(0, 10),
+    // The Riyadh day, not UTC: between 00:00 and 03:00 UTC is still yesterday (R2.4b).
+    voucher_date: riyadhToday(),
   });
 
   const categories = useMemo(
@@ -3061,6 +3063,8 @@ export function ReportsCenterView({
                   <input
                     required
                     type="date"
+                    // A voucher records money that already moved (owner's decision, R2.4b).
+                    max={riyadhToday()}
                     value={voucherForm.voucher_date}
                     onChange={(e) =>
                       setVoucherForm((p) => ({ ...p, voucher_date: e.target.value }))

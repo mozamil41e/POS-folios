@@ -10,6 +10,7 @@ import { createPurchasesRouter } from './modules/purchases/routes.ts';
 import { createSettingsRouter } from './modules/settings/routes.ts';
 import { createSuppliersRouter } from './modules/suppliers/routes.ts';
 import { createUsersRouter } from './modules/users/routes.ts';
+import { createVouchersRouter } from './modules/vouchers/routes.ts';
 import { createInventoryRouter } from './modules/inventory/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { emptyBodyAsObject, requestId, requestLogger } from './middleware/request.ts';
@@ -95,6 +96,7 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(createCustomersRouter());
   app.use(createSuppliersRouter());
   app.use(createPurchasesRouter());
+  app.use(createVouchersRouter());
   app.use(createInventoryRouter());
   // The routes not moved yet, as they were; R2.4b empties this router.
   app.use(createLegacyRouter({ limiters }));
