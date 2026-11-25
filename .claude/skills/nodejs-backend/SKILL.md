@@ -12,9 +12,9 @@ Practical rules for building the Express backend described in `docs/ARCHITECTURE
 - **Don't use for:** SQL schema design or migrations (use `mysql-database`), deployment or CI (use `devops`), UI (use `react-frontend`).
 
 ## Current state (read before editing)
-- `server.ts` holds all 36 routes inline. Validation is `String(b.x ?? '')`, and SQL runs through better-sqlite3 directly.
+- Since R2.1: `server/src/main.ts` (entry, env check, Vite or dist), `server/src/app.ts` (`createApp`: request id, pino request log, helmet, JSON, routes, central error handler), `config/env.ts` (zod), `shared/errors.ts` (`AppError` family), `logger.ts`. All routes are still inline in `server/src/legacy/routes.ts`, with validation in `src/server/input-rules.ts` and SQL through better-sqlite3 directly.
 - `src/server/db.ts` holds the schema, ad-hoc migrations, demo seeds, queries, sessions and scrypt.
-- Express 4: **async handlers are not caught** (`server.ts:1736`, `:1771`). An unhandled rejection crashes the process.
+- Express 5 (R2.1): async errors reach the error handler without a wrapper; `req.body` is normalised to `{}` when there is no JSON body.
 - Transitional rule (R1): make **minimal, tested** fixes in place. Don't half-migrate a route to the new structure during R1.
 - From R2: move **one domain at a time** into `server/src/modules/<domain>/`. Keep the old path working (alias to the new controller) until the frontend migrates.
 
@@ -74,7 +74,7 @@ router.post('/', requirePermission('vouchers.manage'), validate({ body: createVo
 - Throw `AppError` subclasses (`NotFound`, `Forbidden`, `Conflict('INSUFFICIENT_STOCK', …)`, `Invalid(details)`). Never call `res.status(...).json({error: 'text'})` ad hoc in new code.
 - One `errorHandler` maps an `AppError` to `{ error: { code, message, details } }`. Anything else becomes a `500 INTERNAL`, with the full error logged through pino and **never** sent to the client.
 - Error codes are stable `UPPER_SNAKE` strings. The client translates them, so don't send Arabic or English UI text from the server.
-- **Express 5:** async errors propagate automatically. Until the upgrade (R2.1), wrap async handlers with `asyncHandler`.
+- **Express 5:** async errors propagate automatically (no `asyncHandler` since R2.1). Wildcard routes use the named form (`/{*path}`), not `*`.
 - Express 5 gotchas:
   - `req.query` is read-only, so store parsed input in `req.validated`.
   - Wildcards must be named, so the SPA fallback `app.get('*')` becomes `app.get('/{*splat}')`.
@@ -142,6 +142,7 @@ const items = await trx.selectFrom('inventory_items')
 - No timers (`setInterval`) for business jobs, no sockets, no workers. Periodic jobs go in `server/scripts/*.ts`, run by hPanel cron.
 
 ## Anti-patterns already in this repo (don't copy them)
+Line references below are from the R0 audit of the old `server.ts`; several are fixed (see the roadmap), but the patterns stay forbidden.
 - `SELECT *` sent to the client, which leaks secrets (`db.ts:826`, `server.ts:237`).
 - Read endpoints without a permission check (`/api/bootstrap`).
 - Trusting `invoice_type_code` from the client (`server.ts:1458`).

@@ -1,3 +1,4 @@
+import { ValidationError } from '../../server/src/shared/errors.ts';
 import { isValidVatNumber } from '../validation.ts';
 import type { Customer, Product, Supplier } from '../types.ts';
 
@@ -27,13 +28,11 @@ export type InputReason =
   | 'INVALID_CHOICE'
   | 'NOT_FOUND';
 
-export class InputError extends Error {
-  readonly field: string;
-  readonly reason: InputReason;
+/** A ValidationError whose reason is one of the codes above (R2.1). */
+export class InputError extends ValidationError {
+  declare readonly reason: InputReason;
   constructor(field: string, reason: InputReason, message: string) {
-    super(message);
-    this.field = field;
-    this.reason = reason;
+    super(field, reason, message);
   }
 }
 

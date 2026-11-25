@@ -54,7 +54,9 @@ describe('error handling (R1.5)', () => {
         .set(bearer(adminToken))
         .send({ voucher_type: 'receipt', payment_channel: 'cash', party_name: 'X', amount: 10, voucher_date: '2026-11-01' });
       expect(res.status).toBe(500);
-      expect(res.body).toEqual({ error: 'Internal server error.', code: 'INTERNAL' });
+      // R2.1: the request id lets the owner quote the failure; it matches the header and the log line.
+      expect(res.body).toEqual({ error: 'Internal server error.', code: 'INTERNAL', requestId: res.headers['x-request-id'] });
+      expect(res.body.requestId).toMatch(/^[0-9a-f-]{36}$/);
       expectJsonWithoutInternals(res);
       expect(res.text).not.toContain('simulated failure');
     } finally {

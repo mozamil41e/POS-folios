@@ -7,9 +7,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsx server/src/main.ts",
     "start": "node server.js",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=server.js",
+    "build": "vite build && esbuild server/src/main.ts --bundle --platform=node --format=esm --packages=external --outfile=server.js",
     "preview": "vite preview",
     "clean": "node -e \"for (const p of ['dist', 'server.js']) require('fs').rmSync(p, { recursive: true, force: true })\"",
     "lint": "oxlint .",
@@ -23,20 +23,22 @@
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "better-sqlite3": "^13.2.0",
-    "express": "^4.21.2",
+    "express": "^5.3.0",
     "express-rate-limit": "^8.7.5",
     "helmet": "^8.3.0",
     "lucide-react": "^0.546.0",
+    "pino": "^10.4.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",

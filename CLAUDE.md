@@ -53,12 +53,12 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 |---|---|---|
 | Language | TypeScript ^7 with `"strict": true` set explicitly (R1.11); 0 errors | Keep 0 errors |
 | Frontend | React 19, Vite 8, Tailwind 4, lucide-react, qrcode | + React Router, TanStack Query, shared UI kit, typed i18n |
-| Backend | Express ^4.21 in a single `server.ts` | Express 5 modular monolith (`server/src/modules/*`) |
+| Backend | Express ^5 (R2.1): `server/src/app.ts` (`createApp`), `main.ts` (entry), routes still in `server/src/legacy/routes.ts` | Express 5 modular monolith (`server/src/modules/*`) |
 | Validation | Manual `String(b.x ?? '')` checks | zod schemas in `shared/schemas` |
 | Data access | better-sqlite3 (sync), inline SQL | Kysely, first on SQLite, then **MariaDB via mysql2** |
 | Database | SQLite file in `./data` | **MariaDB** (Hostinger; MySQL-compatible SQL only) |
 | Auth | Bearer token held in React state | httpOnly cookie session + CSRF |
-| Logging | `console.log` at boot only | pino (stdout) + optional Sentry |
+| Logging | pino JSON on stdout, one line per API request with `X-Request-Id`, credentials redacted (R2.1) | + optional Sentry |
 | Tests | Vitest: API tests with Supertest (`tests/api`, temp SQLite per file) and UI tests with Testing Library + jsdom (`tests/ui/*.test.tsx`); CI on Node 22/24 | + MariaDB integration tests, Playwright E2E |
 | Package manager | npm + `package-lock.json`, package `mizan-pos`, `engines.node >= 22`. Build tools (vite and its plugins) stay in `dependencies` because Hostinger builds on the server; CI runs `npm audit --omit=dev --audit-level=high` (R1.11) | — |
 
@@ -68,8 +68,8 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 
 ```bash
 npm install          # node_modules is not committed
-npm run dev          # tsx server.ts — Express + Vite middleware on http://localhost:3000
-npm run build        # vite build + esbuild bundle server.ts -> server.js
+npm run dev          # tsx server/src/main.ts — Express + Vite middleware on http://localhost:3000
+npm run build        # vite build + esbuild bundle server/src/main.ts -> server.js (Hostinger's entry file)
 npm start            # node server.js (production mode, serves dist/)
 npm run lint         # oxlint (typescript-eslint does not support TS 7 yet)
 npm run typecheck    # tsc --noEmit
@@ -86,7 +86,8 @@ Production always starts empty (R1.7): no demo products, customers or invoices, 
 
 Do not assume that the target structure exists yet.
 
-- `server.ts` (2,021 lines): every API route, with validation, business logic and SQL inline. It also hosts the Vite dev middleware and static serving.
+- `server/src/` (R2.1): `main.ts` validates the environment (`config/env.ts`, zod; production refuses to start without `SETUP_TOKEN`), then serves Vite (dev) or `dist/` (production). `app.ts` builds the app: request id, request log, helmet, JSON body, the routes, and the central error handler (`AppError` from `shared/errors.ts` keeps its status and code; anything else is logged and answered 500 `INTERNAL` with the request id).
+- `server/src/legacy/routes.ts`: every API route as it was in the old `server.ts` (validation, business logic and SQL inline). R2.4 moves them domain by domain into `server/src/modules/<domain>`, products/inventory first (R2.4a).
 - `src/server/db.ts`: schema creation, ad-hoc `ALTER` "migrations", queries, sessions, password hashing. Demo data lives in `src/server/demo-data.ts`; only `npm run seed:dev` and the tests load it (R1.7).
 - ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
@@ -207,7 +208,9 @@ These facts come from Hostinger's support pages. Design around them:
 
 - Middleware order: `requestId → logger → helmet → json(limit) → requireAuth → csrf → requirePermission(key) → validate(schema) → controller`.
 - **Every route declares a permission**, reads included. The UI hiding something is not access control.
-- Until Express 5 (R2.1), wrap every `async` route in `asyncHandler(...)`. Throw unexpected errors and let the central `errorHandler` answer: JSON 500 `INTERNAL`, no internals. Only known business codes may be returned as 400 (`knownErrorCode`).
+- Express 5 (R2.1) passes errors from `async` routes to the error handler by itself: no wrapper. Throw an `AppError` subclass (`NotFoundError`, `ConflictError`, `ValidationError`, ...) for known cases; anything else ends as JSON 500 `INTERNAL` with the request id, logged, no internals. In legacy routes, only known business codes may become 400 (`knownErrorCode`).
+- Read configuration from the validated `AppConfig` (`server/src/config/env.ts`), never from `process.env` in routes. Add a new variable to the schema and to `.env.example`.
+- Log through the pino logger (`createApp` gives one); never log request bodies, passwords, tokens or the setup token.
 - Once a sale or credit note is committed, never answer with an error. Log any follow-up failure and still return 201 (prevents double sales).
 - Responses:
   - success: `{ "data": … }`

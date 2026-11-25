@@ -86,6 +86,8 @@ function createLimiter({ windowMs, limit, failuresOnly, message }: LimiterOption
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
+export type RateLimiters = ReturnType<typeof createRateLimiters>;
+
 /** Per-IP limits approved for R1.9. One set per app instance. */
 export function createRateLimiters() {
   return {

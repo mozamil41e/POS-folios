@@ -36,12 +36,13 @@ export function makeTempDbPath(): string {
 }
 
 /**
- * Boots the real server module (server.ts) against a temporary SQLite
- * database, plus the demo workspace unless `demoData: false`. Call it once per
- * test file in beforeAll — Vitest isolates modules per file, so every file gets
- * its own DB (a second call in the same file returns the same app and DB).
+ * Builds the real app (createApp in server/src/app.ts, the same code the server
+ * runs) against a temporary SQLite database, plus the demo workspace unless
+ * `demoData: false`. Call it once per test file in beforeAll: Vitest isolates
+ * modules per file, so every file gets its own DB. The database module is
+ * cached per file, so a second call in the same file reuses the first DB.
  * Environment variables are set explicitly because a worker process may be
- * reused by another test file.
+ * reused by another test file; createApp() validates them like the server does.
  */
 export async function createTestApp(options: TestAppOptions = {}): Promise<TestApp> {
   const dbPath = options.dbPath ?? makeTempDbPath();
@@ -56,15 +57,16 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   } else {
     delete process.env.TRUST_PROXY;
   }
-  const server = await import('../../server.ts');
+  const { createApp } = await import('../../server/src/app.ts');
   const { db } = await import('../../src/server/db.ts');
+  const { app } = createApp();
   if (options.demoData !== false) {
     // Skipped automatically when the database already holds business data.
     const { seedDemoData } = await import('../../src/server/demo-data.ts');
     seedDemoData();
   }
   return {
-    app: server.app,
+    app,
     db,
     cleanup: () => {
       db.close();
