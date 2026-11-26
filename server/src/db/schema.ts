@@ -47,6 +47,15 @@ export interface HeldCartsTable {
   created_at: string;
 }
 
+export interface IdempotencyKeysTable {
+  user_id: number;
+  idem_key: string;
+  endpoint: string;
+  request_hash: string;
+  resource_id: number;
+  created_at: string;
+}
+
 export interface InvoiceItemsTable {
   id: Generated<number>;
   invoice_id: number;
@@ -242,6 +251,7 @@ export interface Database {
   customers: CustomersTable;
   document_sequences: DocumentSequencesTable;
   held_carts: HeldCartsTable;
+  idempotency_keys: IdempotencyKeysTable;
   invoice_items: InvoiceItemsTable;
   invoices: InvoicesTable;
   login_attempts: LoginAttemptsTable;
@@ -263,6 +273,7 @@ export const TABLE_COLUMNS = {
   customers: ['id', 'name_ar', 'name_en', 'vat_number', 'cr_number', 'address_ar', 'phone', 'created_at'],
   document_sequences: ['doc_type', 'period_year', 'last_value'],
   held_carts: ['id', 'label', 'items_json', 'discount', 'customer_id', 'invoice_subtype', 'created_at'],
+  idempotency_keys: ['user_id', 'idem_key', 'endpoint', 'request_hash', 'resource_id', 'created_at'],
   invoice_items: ['id', 'invoice_id', 'product_id', 'sku', 'name_ar', 'name_en', 'unit_ar', 'qty', 'unit_price', 'discount', 'tax_rate', 'tax_category', 'line_subtotal', 'line_vat', 'line_total'],
   invoices: ['id', 'uuid', 'invoice_number', 'invoice_type_code', 'invoice_subtype', 'payment_method', 'cash_amount', 'card_amount', 'customer_id', 'customer_name', 'customer_vat', 'subtotal', 'discount_total', 'vat_total', 'grand_total', 'related_invoice_number', 'created_at'],
   login_attempts: ['email', 'failed_count', 'window_started_at', 'locked_until'],

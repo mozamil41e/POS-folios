@@ -5,6 +5,7 @@ import { loadConfig, type AppConfig } from './config/env.ts';
 import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
 import { requireAuth } from './middleware/auth.ts';
 import { createAuthRouter } from './modules/auth/routes.ts';
+import { createHealthRouter } from './modules/health/routes.ts';
 import { createPublicInvoiceRouter } from './modules/public-invoice/routes.ts';
 import { createWorkspaceRouter } from './modules/workspace/routes.ts';
 import { createCustomersRouter } from './modules/customers/routes.ts';
@@ -18,6 +19,7 @@ import { createInventoryRouter } from './modules/inventory/routes.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { emptyBodyAsObject, requestId, requestLogger } from './middleware/request.ts';
 import { AppError } from './shared/errors.ts';
+import { sendError } from './shared/respond.ts';
 
 /**
  * Builds the Express app (R2.1): API routes and the central error handler,
@@ -45,19 +47,21 @@ export interface MizanApp {
  * Express 5 forwards errors from async routes here by itself.
  */
 export function createErrorHandler(logger: Logger): ErrorRequestHandler {
+  // Under /api/v1 errors use the v1 envelope { error: { code, message, details } }
+  // (R2.5); elsewhere the current { error, code, ...details } shape is kept.
   return (err, req, res, next) => {
     const e = err as { type?: string } | null;
     if (e?.type === 'entity.parse.failed') {
-      res.status(400).json({ error: 'Malformed JSON request body.', code: 'INVALID_JSON' });
+      sendError(req, res, 400, 'INVALID_JSON', 'Malformed JSON request body.');
       return;
     }
     if (e?.type === 'entity.too.large') {
-      res.status(413).json({ error: 'Request body is too large.', code: 'PAYLOAD_TOO_LARGE' });
+      sendError(req, res, 413, 'PAYLOAD_TOO_LARGE', 'Request body is too large.');
       return;
     }
     if (err instanceof AppError) {
       res.set(err.headers);
-      res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
+      sendError(req, res, err.status, err.code, err.message, err.details);
       return;
     }
 
@@ -67,7 +71,7 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
       next(err);
       return;
     }
-    res.status(500).json({ error: 'Internal server error.', code: 'INTERNAL', requestId: reqId });
+    sendError(req, res, 500, 'INTERNAL', 'Internal server error.', { requestId: reqId });
   };
 }
 
@@ -93,6 +97,7 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   // The modules (R2.4): each route authenticates itself and declares its
   // permission. One set of rate limiters per app.
   const limiters = createRateLimiters();
+  app.use(createHealthRouter());
   app.use(createAuthRouter({ config, limiters }));
   app.use(createPublicInvoiceRouter({ limiters }));
   app.use(createWorkspaceRouter());
@@ -105,8 +110,12 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(createSalesRouter({ logger }));
   app.use(createInventoryRouter());
   // Any other /api path: 401 without a session, so strangers cannot probe which
-  // routes exist; with a session main.ts answers 404 (as before R2.4).
+  // routes exist; with a session main.ts answers 404 (as before R2.4), and an
+  // unknown /api/v1 path gets the v1 envelope here (R2.5).
   app.use('/api', requireAuth());
+  app.use('/api/v1', (req, res) => {
+    sendError(req, res, 404, 'NOT_FOUND', 'API route not found.');
+  });
 
   const errorHandler = createErrorHandler(logger);
   app.use(errorHandler);

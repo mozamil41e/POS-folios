@@ -12,10 +12,11 @@ import {
 } from '../../../../shared/schemas/sales.ts';
 import type { AuthUser, InvoiceItem } from '../../../../shared/types.ts';
 import { isValidVatNumber } from '../../../../shared/validation.ts';
-import { kysely } from '../../db/kysely.ts';
+import { kysely, type Executor } from '../../db/kysely.ts';
 import { nextDocumentNumber } from '../../db/sequences.ts';
 import { withTransaction } from '../../db/transaction.ts';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../../shared/errors.ts';
+import { rememberKey, requestHash, savedResourceId, type IdempotencyScope } from '../../shared/idempotency.ts';
 import { valueOrThrow } from '../../shared/validation.ts';
 import { customers } from '../customers/repository.ts';
 import { findActiveProduct, issueStock } from '../inventory/service.ts';
@@ -33,6 +34,16 @@ import * as repo from './repository.ts';
 export interface Saved {
   id: number;
   invoiceNumber: string;
+  /** True when an Idempotency-Key matched an earlier sale: nothing new was saved. */
+  replayed?: boolean;
+}
+
+/** The endpoint an Idempotency-Key belongs to (R2.5a). */
+const CHECKOUT_ENDPOINT = 'POST /api/invoices';
+
+async function replayed(q: Executor, invoiceId: number): Promise<Saved> {
+  const invoice = await repo.invoices.findById(q, invoiceId);
+  return { id: invoiceId, invoiceNumber: invoice?.invoice_number ?? '', replayed: true };
 }
 
 const CASH_CUSTOMER = 'عميل نقدي / Cash Customer';
@@ -44,8 +55,20 @@ export const lists = {
 
 // ------------------------------------------------------------------ checkout
 
-/** Checked in the legacy order: document type, discount permission, cart, customer, B2B, lines. */
-export async function checkout(raw: Raw, actor: AuthUser): Promise<Saved> {
+/**
+ * Checked in the legacy order: document type, discount permission, cart,
+ * customer, B2B, lines. With an Idempotency-Key (R2.5a), a request already
+ * saved under that key returns the first invoice and saves nothing.
+ */
+export async function checkout(raw: Raw, actor: AuthUser, idempotencyKey: string | null = null): Promise<Saved> {
+  const scope: IdempotencyScope | null = idempotencyKey
+    ? { userId: actor.id, key: idempotencyKey, endpoint: CHECKOUT_ENDPOINT, hash: requestHash(raw) }
+    : null;
+  if (scope) {
+    const earlier = await savedResourceId(kysely, scope);
+    if (earlier !== undefined) return replayed(kysely, earlier);
+  }
+
   // Sales invoices only (R1.5, SEC-09); credit notes go through creditNote().
   if (raw.invoice_type_code !== undefined && raw.invoice_type_code !== DOCUMENT_TYPES.SALES_INVOICE) {
     throw new AppError(400, 'INVALID_DOCUMENT_TYPE', 'Only sales invoices can be issued here.');
@@ -80,6 +103,12 @@ export async function checkout(raw: Raw, actor: AuthUser): Promise<Saved> {
   }
 
   return withTransaction(async (trx) => {
+    // Checked again inside the transaction: of two identical requests sent
+    // together, the second finds the first one's key here.
+    if (scope) {
+      const earlier = await savedResourceId(trx, scope);
+      if (earlier !== undefined) return replayed(trx, earlier);
+    }
     const createdAt = new Date().toISOString();
     const invoiceNumber = await nextDocumentNumber(trx, 'INV');
 
@@ -149,6 +178,7 @@ export async function checkout(raw: Raw, actor: AuthUser): Promise<Saved> {
       created_at: createdAt,
     });
     for (const line of lines) await repo.invoices.insertItem(trx, { ...line, invoice_id: id });
+    if (scope) await rememberKey(trx, scope, id);
     return { id, invoiceNumber };
   });
 }

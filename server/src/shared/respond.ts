@@ -1,5 +1,6 @@
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { scopeForUser } from '../../../src/server/visibility.ts';
+import type { PageMeta } from '../../../shared/schemas/pagination.ts';
 import type { AuthUser } from '../../../shared/types.ts';
 
 /**
@@ -9,4 +10,46 @@ import type { AuthUser } from '../../../shared/types.ts';
  */
 export function sendScoped(res: Response, payload: Record<string, unknown>): void {
   res.json(scopeForUser(res.locals.authUser as AuthUser, payload));
+}
+
+// ------------------------------------------------------------- API v1 (R2.5)
+//
+// Routes under /api/v1 answer with one envelope (CLAUDE.md §11):
+//   success  { "data": … }
+//   lists    { "data": [...], "meta": { page, pageSize, total } }
+//   errors   { "error": { "code", "message", "details" } }
+// The current /api/* routes keep their shape until the UI moves to v1 (R4).
+
+/** True for /api/v1 and everything below it. */
+export function isV1(req: Request): boolean {
+  return /^\/api\/v1(?:[/?]|$)/.test(req.originalUrl);
+}
+
+export function sendData(res: Response, data: unknown, status = 200): void {
+  res.status(status).json({ data });
+}
+
+export function sendList(res: Response, rows: readonly unknown[], meta: PageMeta): void {
+  res.json({ data: rows, meta });
+}
+
+/**
+ * An error in the shape of the route's API: the v1 envelope under /api/v1,
+ * the current { error, code, ...details } elsewhere (the code is left out
+ * where the current routes never sent one).
+ */
+export function sendError(
+  req: Request,
+  res: Response,
+  status: number,
+  code: string,
+  message: string,
+  details: Record<string, unknown> = {},
+  options: { legacyWithoutCode?: boolean } = {}
+): void {
+  if (isV1(req)) {
+    res.status(status).json({ error: { code, message, details } });
+    return;
+  }
+  res.status(status).json(options.legacyWithoutCode ? { error: message, ...details } : { error: message, code, ...details });
 }

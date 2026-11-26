@@ -309,27 +309,32 @@ function PosWorkspace({
     return body;
   };
 
-  const jsonRequest = (method: 'POST' | 'PUT', payload?: unknown): RequestInit => ({
+  const jsonRequest = (method: 'POST' | 'PUT', payload?: unknown, headers: Record<string, string> = {}): RequestInit => ({
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: payload === undefined ? undefined : JSON.stringify(payload),
   });
 
-  const handleCheckout = async (payload: {
+  const handleCheckout = async ({
+    idempotency_key: idempotencyKey,
+    ...payload
+  }: {
     items: Array<{ product_id: number; qty: number }>;
     invoice_subtype: InvoiceSubtype;
     payment_method: PaymentMethod;
     cash_amount: number;
     discount_total: number;
     customer_id: number | null;
+    idempotency_key: string;
   }): Promise<boolean> => {
+    // R2.5a: the key goes in the Idempotency-Key header, not in the sale itself.
     const body = await callApi<{
       invoice?: Invoice;
       settings?: OrganizationSettings;
       products?: BootstrapPayload['products'];
       invoices?: BootstrapPayload['invoices'];
       movements?: BootstrapPayload['movements'];
-    }>('/api/invoices', jsonRequest('POST', payload), 'Checkout failed');
+    }>('/api/invoices', jsonRequest('POST', payload, { 'Idempotency-Key': idempotencyKey }), 'Checkout failed');
     if (!body) return false;
     setData((prev) =>
       prev

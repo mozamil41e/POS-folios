@@ -1,5 +1,6 @@
 import type { RequestHandler } from 'express';
 import type { Transaction } from 'kysely';
+import { sendError } from '../shared/respond.ts';
 import { kysely, type Database } from './kysely.ts';
 
 /**
@@ -78,11 +79,11 @@ export async function withTransaction<T>(work: (trx: Transaction<Database>) => P
  * single check per request; only ever answers when a transaction broke the rule.
  */
 export function requestsWaitWhileTransactionOpen(): RequestHandler {
-  return (_req, res, next) => {
+  return (req, res, next) => {
     if (open) {
       open.interrupted = true;
       res.setHeader('Retry-After', '1');
-      res.status(503).json({ error: 'The server is busy. Please try again.', code: 'SERVER_BUSY' });
+      sendError(req, res, 503, 'SERVER_BUSY', 'The server is busy. Please try again.');
       return;
     }
     next();

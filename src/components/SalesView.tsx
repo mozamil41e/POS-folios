@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Check,
   Copy,
@@ -31,6 +31,7 @@ import { buildPublicInvoiceUrl } from './InvoiceReceiptModal';
 import { isValidVatNumber } from '../../shared/validation';
 import { TablePagination, useTablePagination } from './TablePagination';
 import { roundMoney } from '../../shared/money';
+import { newIdempotencyKey } from '../idempotency';
 
 interface SalesViewProps {
   lang: Language;
@@ -47,6 +48,8 @@ interface SalesViewProps {
     cash_amount: number;
     discount_total: number;
     customer_id: number | null;
+    /** One key per sale attempt (R2.5a): a retry of the same sale reuses it. */
+    idempotency_key: string;
   }) => Promise<boolean>;
   onCreditNote: (invoiceId: number) => Promise<boolean>;
   onCreateCustomer: (payload: {
@@ -112,6 +115,9 @@ export function SalesView({
   const canManageCustomers = hasPermission(currentUser, 'customers.manage');
 
   const [tab, setTab] = useState<'ledger' | 'analytics' | 'customers'>('ledger');
+  // R2.5a: the Idempotency-Key of the sale being sent, kept while the same
+  // sale is retried and renewed after success or when the sale changes.
+  const pendingSale = useRef<{ signature: string; key: string } | null>(null);
   const [search, setSearch] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('all');
@@ -511,7 +517,7 @@ export function SalesView({
 
     setSubmittingSale(true);
     try {
-      const ok = await onCreateSale({
+      const sale = {
         items: draftLines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
         invoice_subtype: saleSubtype,
         payment_method: salePaymentMethod,
@@ -523,9 +529,17 @@ export function SalesView({
             : 0,
         discount_total: canDiscount ? Number(saleDiscount) || 0 : 0,
         customer_id: saleCustomerId ? Number(saleCustomerId) : null,
-      });
+      };
+      const signature = JSON.stringify(sale);
+      if (pendingSale.current?.signature !== signature) {
+        pendingSale.current = { signature, key: newIdempotencyKey() };
+      }
+      const ok = await onCreateSale({ ...sale, idempotency_key: pendingSale.current.key });
       // Keep the draft open on failure so nothing has to be re-entered.
-      if (ok) setShowNewSale(false);
+      if (ok) {
+        pendingSale.current = null;
+        setShowNewSale(false);
+      }
     } finally {
       setSubmittingSale(false);
     }

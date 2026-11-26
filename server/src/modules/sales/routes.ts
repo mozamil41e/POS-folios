@@ -2,6 +2,7 @@ import { Router, type Response } from 'express';
 import type { AuthUser } from '../../../../shared/types.ts';
 import type { Logger } from '../../logger.ts';
 import { requireAuth, requirePermission } from '../../middleware/auth.ts';
+import { idempotencyKeyFrom } from '../../shared/idempotency.ts';
 import { sendScoped } from '../../shared/respond.ts';
 import { lists as inventoryLists } from '../inventory/service.ts';
 import { getSettings } from '../settings/service.ts';
@@ -54,8 +55,12 @@ export function createSalesRouter({ logger }: SalesRouterContext): Router {
   });
 
   // ---------------------------------------------------------- checkout
+  // R2.5a: an optional Idempotency-Key (the till sends one per sale attempt).
+  // The same key again answers with the first invoice, marked Idempotent-Replayed.
   router.post('/api/invoices', auth, requirePermission('pos.access'), async (req, res) => {
-    const saved = await service.checkout(req.body as Body, res.locals.authUser as AuthUser);
+    const key = idempotencyKeyFrom(req.get('Idempotency-Key'));
+    const saved = await service.checkout(req.body as Body, res.locals.authUser as AuthUser, key);
+    if (saved.replayed) res.setHeader('Idempotent-Replayed', 'true');
     await confirmSaved(res, saved);
   });
 

@@ -290,6 +290,20 @@ export function initDatabase(): void {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    -- Idempotency-Key of a sale (R2.5a): a retried checkout returns the first
+    -- invoice instead of selling again. Kept 24 hours: server/src/shared/idempotency.ts
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      user_id INTEGER NOT NULL,
+      idem_key TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, idem_key),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_idempotency_keys_created ON idempotency_keys(created_at);
+
     CREATE TABLE IF NOT EXISTS vouchers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       voucher_number TEXT NOT NULL UNIQUE,

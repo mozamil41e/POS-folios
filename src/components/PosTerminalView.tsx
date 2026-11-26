@@ -27,6 +27,7 @@ import { formatMoney, translations } from '../i18n';
 import { hasPermission } from '../../shared/permissions';
 import { isValidVatNumber } from '../../shared/validation';
 import { roundMoney } from '../../shared/money';
+import { newIdempotencyKey } from '../idempotency';
 
 export interface CartLine {
   product: Product;
@@ -71,6 +72,8 @@ interface PosTerminalViewProps {
     cash_amount: number;
     discount_total: number;
     customer_id: number | null;
+    /** One key per sale attempt (R2.5a): a retry of the same sale reuses it. */
+    idempotency_key: string;
   }) => Promise<boolean>;
   onHoldCart: (payload: {
     label: string;
@@ -111,6 +114,11 @@ export function PosTerminalView({
   const t = translations[lang];
   const isAr = lang === 'ar';
   const barcodeRef = useRef<HTMLInputElement>(null);
+  // R2.5a: the key of the sale being sent. Kept while the same sale is retried
+  // (e.g. after a network error, when the server may already have saved it), so
+  // the server answers with the first invoice instead of selling twice. A new
+  // key after a successful sale or as soon as the sale changes.
+  const pendingSale = useRef<{ signature: string; key: string } | null>(null);
   // The server enforces these too; hiding the controls keeps cashiers out of dead ends.
   const canDiscount = hasPermission(currentUser, 'pos.discount');
   const canHold = hasPermission(currentUser, 'pos.hold');
@@ -327,7 +335,7 @@ export function PosTerminalView({
 
     setSubmitting(true);
     try {
-      const ok = await onCheckout({
+      const sale = {
         items: cart.map((c) => ({ product_id: c.product.id, qty: c.qty })),
         invoice_subtype: invoiceSubtype,
         payment_method: paymentMethod,
@@ -339,9 +347,15 @@ export function PosTerminalView({
             : 0,
         discount_total: totals.discount,
         customer_id: invoiceSubtype === '0100000' ? customerId : null,
-      });
+      };
+      const signature = JSON.stringify(sale);
+      if (pendingSale.current?.signature !== signature) {
+        pendingSale.current = { signature, key: newIdempotencyKey() };
+      }
+      const ok = await onCheckout({ ...sale, idempotency_key: pendingSale.current.key });
       // H1: a rejected sale keeps the cart so the cashier can fix it and retry.
       if (ok) {
+        pendingSale.current = null;
         setCart([]);
         setDiscountInput('0');
         setCashTendered('');

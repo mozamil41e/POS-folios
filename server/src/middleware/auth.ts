@@ -1,5 +1,6 @@
 import type { RequestHandler } from 'express';
 import { userForSession } from '../modules/auth/service.ts';
+import { sendError } from '../shared/respond.ts';
 import type { AuthUser, PermissionKey } from '../../../shared/types.ts';
 
 /**
@@ -13,7 +14,8 @@ export function requireAuth(): RequestHandler {
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
     const user = token ? await userForSession(token) : null;
     if (!user) {
-      res.status(401).json({ error: 'Authentication required.' });
+      // The current routes answered without a code; v1 gets UNAUTHENTICATED (R2.5).
+      sendError(req, res, 401, 'UNAUTHENTICATED', 'Authentication required.', {}, { legacyWithoutCode: true });
       return;
     }
     res.locals.authUser = user;
@@ -24,10 +26,10 @@ export function requireAuth(): RequestHandler {
 
 /** Every route declares the permission it needs, reads included (CLAUDE.md §11). */
 export function requirePermission(permission: PermissionKey): RequestHandler {
-  return (_req, res, next) => {
+  return (req, res, next) => {
     const authUser = res.locals.authUser as AuthUser | undefined;
     if (!authUser || authUser.is_active === 0 || !authUser.permissions.includes(permission)) {
-      res.status(403).json({ error: 'You do not have permission to perform this action.' });
+      sendError(req, res, 403, 'FORBIDDEN', 'You do not have permission to perform this action.', {}, { legacyWithoutCode: true });
       return;
     }
     next();
