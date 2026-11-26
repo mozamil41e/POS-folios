@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import type { AuthUser } from '../../../../shared/types.ts';
-import { requireAuth, requirePermission } from '../../middleware/auth.ts';
-import { sendScoped } from '../../shared/respond.ts';
+import { requireAuth, requireCanView, requirePermission } from '../../middleware/auth.ts';
+import { pageMeta } from '../../../../shared/schemas/pagination.ts';
+import { NotFoundError } from '../../shared/errors.ts';
+import { pageFrom, sendData, sendList, sendScoped } from '../../shared/respond.ts';
 import * as service from './service.ts';
 
 /**
@@ -33,6 +35,20 @@ export function createVouchersRouter(): Router {
     await service.voidVoucher(id, req.body as Body, res.locals.authUser as AuthUser);
     const vouchers = await service.lists.vouchers();
     sendScoped(res, { voucher: vouchers.find((v) => v.id === id), vouchers });
+  });
+
+  // ------------------------------------------------ API v1 reads (R2.5b)
+  const view = [requireAuth(), requireCanView('vouchers')];
+
+  router.get('/api/v1/vouchers', ...view, async (req, res) => {
+    const page = pageFrom(req);
+    sendList(res, await service.reads.page(page), pageMeta(page, await service.reads.count()));
+  });
+
+  router.get('/api/v1/vouchers/:id', ...view, async (req, res) => {
+    const voucher = await service.reads.one(Number(req.params.id));
+    if (!voucher) throw new NotFoundError('VOUCHER_NOT_FOUND', 'Voucher not found.');
+    sendData(res, voucher);
   });
 
   return router;

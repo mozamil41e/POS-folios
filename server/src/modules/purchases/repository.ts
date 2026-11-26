@@ -64,8 +64,8 @@ export type NewPurchaseItem = Omit<PurchaseItem, 'id'> & { purchase_id: number }
 
 export const purchases = {
   /** The latest purchases with their lines, newest first (the limit goes with server-side reports in R6). */
-  async list(q: Executor, limit = 100): Promise<Purchase[]> {
-    const rows = await q.selectFrom('purchases').select(PURCHASE_COLUMNS).orderBy('id', 'desc').limit(limit).execute();
+  async list(q: Executor, limit = 100, offset = 0): Promise<Purchase[]> {
+    const rows = await q.selectFrom('purchases').select(PURCHASE_COLUMNS).orderBy('id', 'desc').limit(limit).offset(offset).execute();
     if (rows.length === 0) return [];
     const items = await q
       .selectFrom('purchase_items')
@@ -84,6 +84,19 @@ export const purchases = {
       byPurchase.set(item.purchase_id, list);
     }
     return rows.map((r) => ({ ...r, payment_status: paymentStatus(r.payment_status), items: byPurchase.get(r.id) ?? [] }));
+  },
+
+  async count(q: Executor): Promise<number> {
+    const row = await q.selectFrom('purchases').select((eb) => eb.fn.countAll<number>().as('n')).executeTakeFirst();
+    return Number(row?.n ?? 0);
+  },
+
+  /** One purchase with its lines (v1 reads). */
+  async findWithItems(q: Executor, id: number): Promise<Purchase | undefined> {
+    const purchase = await this.findById(q, id);
+    if (!purchase) return undefined;
+    const items = await q.selectFrom('purchase_items').select(ITEM_COLUMNS).where('purchase_id', '=', id).orderBy('id', 'asc').execute();
+    return { ...purchase, items };
   },
 
   async findById(q: Executor, id: number): Promise<Omit<Purchase, 'items'> | undefined> {

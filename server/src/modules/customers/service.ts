@@ -1,5 +1,6 @@
 import type { Raw } from '../../../../shared/schemas/common.ts';
 import { parseCustomer } from '../../../../shared/schemas/parties.ts';
+import { type PageRequest } from '../../../../shared/schemas/pagination.ts';
 import { kysely } from '../../db/kysely.ts';
 import { withTransaction } from '../../db/transaction.ts';
 import { NotFoundError } from '../../shared/errors.ts';
@@ -29,3 +30,10 @@ export async function updateCustomer(id: number, raw: Raw): Promise<void> {
   const input = valueOrThrow(parseCustomer(raw, existing));
   await withTransaction((trx) => repo.customers.update(trx, id, input));
 }
+
+/** API v1 reads (R2.5b): one page of a list, its total, one item. */
+export const reads = {
+  page: (page: PageRequest) => repo.customers.list(kysely, page.pageSize, page.offset),
+  count: () => repo.customers.count(kysely),
+  one: (id: number) => repo.customers.findById(kysely, id),
+};

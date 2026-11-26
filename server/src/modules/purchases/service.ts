@@ -9,6 +9,7 @@ import {
   type PurchaseLineInput,
 } from '../../../../shared/schemas/purchases.ts';
 import type { Product } from '../../../../shared/types.ts';
+import type { PageRequest } from '../../../../shared/schemas/pagination.ts';
 import { kysely } from '../../db/kysely.ts';
 import { nextDocumentNumber } from '../../db/sequences.ts';
 import { withTransaction } from '../../db/transaction.ts';
@@ -116,3 +117,10 @@ export async function payPurchase(id: number, raw: Raw): Promise<void> {
     await repo.purchases.setPayment(trx, id, paid, status);
   });
 }
+
+/** API v1 reads (R2.5b): one page of a list, its total, one item. */
+export const reads = {
+  page: (page: PageRequest) => repo.purchases.list(kysely, page.pageSize, page.offset),
+  count: () => repo.purchases.count(kysely),
+  one: (id: number) => repo.purchases.findWithItems(kysely, id),
+};

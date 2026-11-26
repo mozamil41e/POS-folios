@@ -1,9 +1,11 @@
 import { Router, type Response } from 'express';
 import type { AuthUser } from '../../../../shared/types.ts';
 import type { Logger } from '../../logger.ts';
-import { requireAuth, requirePermission } from '../../middleware/auth.ts';
+import { requireAuth, requireCanView, requirePermission } from '../../middleware/auth.ts';
 import { idempotencyKeyFrom } from '../../shared/idempotency.ts';
-import { sendScoped } from '../../shared/respond.ts';
+import { pageMeta } from '../../../../shared/schemas/pagination.ts';
+import { NotFoundError } from '../../shared/errors.ts';
+import { pageFrom, sendAll, sendData, sendList, sendScoped } from '../../shared/respond.ts';
 import { lists as inventoryLists } from '../inventory/service.ts';
 import { getSettings } from '../settings/service.ts';
 import * as service from './service.ts';
@@ -68,6 +70,22 @@ export function createSalesRouter({ logger }: SalesRouterContext): Router {
   router.post('/api/invoices/:id/credit-note', auth, requirePermission('sales.return'), async (req, res) => {
     const saved = await service.creditNote(Number(req.params.id));
     await confirmSaved(res, saved);
+  });
+
+  // ------------------------------------------------ API v1 reads (R2.5b)
+  router.get('/api/v1/invoices', auth, requireCanView('invoices'), async (req, res) => {
+    const page = pageFrom(req);
+    sendList(res, await service.reads.page(page), pageMeta(page, await service.reads.count()));
+  });
+
+  router.get('/api/v1/invoices/:id', auth, requireCanView('invoices'), async (req, res) => {
+    const invoice = await service.reads.one(Number(req.params.id));
+    if (!invoice) throw new NotFoundError('INVOICE_NOT_FOUND', 'Invoice not found.');
+    sendData(res, invoice);
+  });
+
+  router.get('/api/v1/held-carts', auth, requireCanView('heldCarts'), async (_req, res) => {
+    sendAll(res, await service.lists.heldCarts());
   });
 
   return router;

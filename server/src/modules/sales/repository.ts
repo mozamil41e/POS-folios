@@ -74,8 +74,8 @@ export type NewInvoiceItem = Omit<InvoiceItem, 'id'> & { invoice_id: number };
 
 export const invoices = {
   /** The latest invoices and credit notes with their lines, newest first (the limit goes with server-side reports in R6). */
-  async list(q: Executor, limit = 100): Promise<Invoice[]> {
-    const rows = await q.selectFrom('invoices').select(INVOICE_COLUMNS).orderBy('id', 'desc').limit(limit).execute();
+  async list(q: Executor, limit = 100, offset = 0): Promise<Invoice[]> {
+    const rows = await q.selectFrom('invoices').select(INVOICE_COLUMNS).orderBy('id', 'desc').limit(limit).offset(offset).execute();
     if (rows.length === 0) return [];
     const items = await q
       .selectFrom('invoice_items')
@@ -94,6 +94,17 @@ export const invoices = {
       byInvoice.set(item.invoice_id, list);
     }
     return rows.map((r) => ({ ...typed(r), items: byInvoice.get(r.id) ?? [] }));
+  },
+
+  async count(q: Executor): Promise<number> {
+    const row = await q.selectFrom('invoices').select((eb) => eb.fn.countAll<number>().as('n')).executeTakeFirst();
+    return Number(row?.n ?? 0);
+  },
+
+  /** One invoice or credit note with its lines (v1 reads). */
+  async findWithItems(q: Executor, id: number): Promise<Invoice | undefined> {
+    const invoice = await this.findById(q, id);
+    return invoice ? { ...invoice, items: await this.items(q, id) } : undefined;
   },
 
   async findById(q: Executor, id: number): Promise<Omit<Invoice, 'items'> | undefined> {

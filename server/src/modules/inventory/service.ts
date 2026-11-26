@@ -9,6 +9,7 @@ import {
   parseProduct,
   type CategoryRef,
 } from '../../../../shared/schemas/inventory.ts';
+import type { PageRequest } from '../../../../shared/schemas/pagination.ts';
 import { kysely } from '../../db/kysely.ts';
 import { withTransaction } from '../../db/transaction.ts';
 import { AppError, ConflictError, NotFoundError, ValidationError } from '../../shared/errors.ts';
@@ -281,4 +282,14 @@ export const lists = {
   categories: () => repo.categories.list(kysely),
   movements: () => repo.movements.recent(kysely, 80),
   product: (id: number) => repo.products.findById(kysely, id),
+};
+
+/** API v1 reads (R2.5b): one page of a list, its total, one item. */
+export const reads = {
+  products: (page: PageRequest) => repo.products.listActive(kysely, page.pageSize, page.offset),
+  productCount: () => repo.products.countActive(kysely),
+  /** Active products only, like the list. */
+  product: (id: number) => repo.products.findActiveById(kysely, id),
+  movements: (page: PageRequest) => repo.movements.recent(kysely, page.pageSize, page.offset),
+  movementCount: () => repo.movements.count(kysely),
 };

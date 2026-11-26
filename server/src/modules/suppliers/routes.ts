@@ -1,6 +1,8 @@
 import { Router } from 'express';
-import { requireAuth, requirePermission } from '../../middleware/auth.ts';
-import { sendScoped } from '../../shared/respond.ts';
+import { requireAuth, requireCanView, requirePermission } from '../../middleware/auth.ts';
+import { pageMeta } from '../../../../shared/schemas/pagination.ts';
+import { NotFoundError } from '../../shared/errors.ts';
+import { pageFrom, sendData, sendList, sendScoped } from '../../shared/respond.ts';
 import * as service from './service.ts';
 
 /**
@@ -22,6 +24,20 @@ export function createSuppliersRouter(): Router {
   router.put('/api/suppliers/:id', ...manage, async (req, res) => {
     await service.updateSupplier(Number(req.params.id), req.body as Body);
     sendScoped(res, { suppliers: await service.lists.suppliers() });
+  });
+
+  // ------------------------------------------------ API v1 reads (R2.5b)
+  const view = [requireAuth(), requireCanView('suppliers')];
+
+  router.get('/api/v1/suppliers', ...view, async (req, res) => {
+    const page = pageFrom(req);
+    sendList(res, await service.reads.page(page), pageMeta(page, await service.reads.count()));
+  });
+
+  router.get('/api/v1/suppliers/:id', ...view, async (req, res) => {
+    const supplier = await service.reads.one(Number(req.params.id));
+    if (!supplier) throw new NotFoundError('SUPPLIER_NOT_FOUND', 'Supplier not found.');
+    sendData(res, supplier);
   });
 
   return router;

@@ -1,6 +1,7 @@
 import type { RequestHandler } from 'express';
 import { userForSession } from '../modules/auth/service.ts';
 import { sendError } from '../shared/respond.ts';
+import { canViewData, type VisibleDataKey } from '../../../shared/permissions.ts';
 import type { AuthUser, PermissionKey } from '../../../shared/types.ts';
 
 /**
@@ -20,6 +21,21 @@ export function requireAuth(): RequestHandler {
     }
     res.locals.authUser = user;
     res.locals.authToken = token;
+    next();
+  };
+}
+
+/**
+ * API v1 reads (R2.5b): the user may read this list, by the same rules as the
+ * workspace bootstrap (R1.3, DATA_VISIBILITY in shared/permissions.ts).
+ */
+export function requireCanView(key: VisibleDataKey): RequestHandler {
+  return (req, res, next) => {
+    const authUser = res.locals.authUser as AuthUser | undefined;
+    if (!authUser || authUser.is_active === 0 || !canViewData(authUser, key)) {
+      sendError(req, res, 403, 'FORBIDDEN', 'You do not have permission to perform this action.', {}, { legacyWithoutCode: true });
+      return;
+    }
     next();
   };
 }

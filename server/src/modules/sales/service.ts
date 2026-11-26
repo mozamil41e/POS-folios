@@ -12,6 +12,7 @@ import {
 } from '../../../../shared/schemas/sales.ts';
 import type { AuthUser, InvoiceItem } from '../../../../shared/types.ts';
 import { isValidVatNumber } from '../../../../shared/validation.ts';
+import type { PageRequest } from '../../../../shared/schemas/pagination.ts';
 import { kysely, type Executor } from '../../db/kysely.ts';
 import { nextDocumentNumber } from '../../db/sequences.ts';
 import { withTransaction } from '../../db/transaction.ts';
@@ -235,3 +236,10 @@ export async function holdCart(raw: Raw): Promise<void> {
 export async function releaseCart(id: number): Promise<void> {
   await withTransaction((trx) => repo.heldCarts.delete(trx, id));
 }
+
+/** API v1 reads (R2.5b): one page of a list, its total, one item. */
+export const reads = {
+  page: (page: PageRequest) => repo.invoices.list(kysely, page.pageSize, page.offset),
+  count: () => repo.invoices.count(kysely),
+  one: (id: number) => repo.invoices.findWithItems(kysely, id),
+};

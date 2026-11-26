@@ -56,8 +56,15 @@ export const products = {
     await q.updateTable('products').set({ stock_qty: stockQty, updated_at: now() }).where('id', '=', id).execute();
   },
 
-  async listActive(q: Executor): Promise<Product[]> {
-    return (await q.selectFrom('products').selectAll().where('active', '=', 1).orderBy('id', 'asc').execute()) as Product[];
+  async listActive(q: Executor, limit?: number, offset = 0): Promise<Product[]> {
+    let query = q.selectFrom('products').selectAll().where('active', '=', 1).orderBy('id', 'asc');
+    if (limit !== undefined) query = query.limit(limit).offset(offset);
+    return (await query.execute()) as Product[];
+  },
+
+  async countActive(q: Executor): Promise<number> {
+    const row = await q.selectFrom('products').select((eb) => eb.fn.countAll<number>().as('n')).where('active', '=', 1).executeTakeFirst();
+    return Number(row?.n ?? 0);
   },
 };
 
@@ -78,7 +85,7 @@ export const movements = {
     await q.insertInto('stock_movements').values(movement).execute();
   },
 
-  async recent(q: Executor, limit = 80): Promise<StockMovement[]> {
+  async recent(q: Executor, limit = 80, offset = 0): Promise<StockMovement[]> {
     return (await q
       .selectFrom('stock_movements as sm')
       .innerJoin('products as p', 'p.id', 'sm.product_id')
@@ -86,7 +93,18 @@ export const movements = {
       .select(['p.name_ar as product_name_ar', 'p.name_en as product_name_en', 'p.sku as sku'])
       .orderBy('sm.id', 'desc')
       .limit(limit)
+      .offset(offset)
       .execute()) as StockMovement[];
+  },
+
+  /** Movements that have their product (the same join as recent()). */
+  async count(q: Executor): Promise<number> {
+    const row = await q
+      .selectFrom('stock_movements as sm')
+      .innerJoin('products as p', 'p.id', 'sm.product_id')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirst();
+    return Number(row?.n ?? 0);
   },
 };
 

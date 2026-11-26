@@ -10,8 +10,15 @@ const COLUMNS = ['id', 'name_ar', 'name_en', 'vat_number', 'cr_number', 'address
 
 export const customers = {
   /** Oldest first, as before. */
-  async list(q: Executor): Promise<Customer[]> {
-    return q.selectFrom('customers').select(COLUMNS).orderBy('id', 'asc').execute();
+  async list(q: Executor, limit?: number, offset = 0): Promise<Customer[]> {
+    let query = q.selectFrom('customers').select(COLUMNS).orderBy('id', 'asc');
+    if (limit !== undefined) query = query.limit(limit).offset(offset);
+    return query.execute();
+  },
+
+  async count(q: Executor): Promise<number> {
+    const row = await q.selectFrom('customers').select((eb) => eb.fn.countAll<number>().as('n')).executeTakeFirst();
+    return Number(row?.n ?? 0);
   },
 
   async findById(q: Executor, id: number): Promise<Customer | undefined> {

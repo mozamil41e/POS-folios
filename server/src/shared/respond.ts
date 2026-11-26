@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { scopeForUser } from '../../../src/server/visibility.ts';
-import type { PageMeta } from '../../../shared/schemas/pagination.ts';
+import { parsePage, type PageMeta, type PageRequest } from '../../../shared/schemas/pagination.ts';
+import { valueOrThrow } from './validation.ts';
 import type { AuthUser } from '../../../shared/types.ts';
 
 /**
@@ -31,6 +32,26 @@ export function sendData(res: Response, data: unknown, status = 200): void {
 
 export function sendList(res: Response, rows: readonly unknown[], meta: PageMeta): void {
   res.json({ data: rows, meta });
+}
+
+/** A complete (unpaged) list: one page holding every row. */
+export function sendAll(res: Response, rows: readonly unknown[]): void {
+  sendList(res, rows, { page: 1, pageSize: rows.length, total: rows.length });
+}
+
+/**
+ * One value through the read-scope filter, under the key scopeForUser knows
+ * (products, product, settings, ...): cost prices hidden without cost
+ * permission (D11), settings kept to their public fields.
+ */
+export function scopedFor<T>(res: Response, key: string, value: T): T {
+  const scoped = scopeForUser(res.locals.authUser as AuthUser, { [key]: value });
+  return scoped[key] as T;
+}
+
+/** ?page=&pageSize= of a v1 list; a bad value is a 400 VALIDATION_FAILED. */
+export function pageFrom(req: Request): PageRequest {
+  return valueOrThrow(parsePage(req.query as Record<string, unknown>));
 }
 
 /**

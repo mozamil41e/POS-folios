@@ -1,6 +1,9 @@
 import { Router } from 'express';
-import { requireAuth, requirePermission } from '../../middleware/auth.ts';
-import { sendScoped } from '../../shared/respond.ts';
+import { requireAuth, requireCanView, requirePermission } from '../../middleware/auth.ts';
+import type { VisibleDataKey } from '../../../../shared/permissions.ts';
+import { pageMeta } from '../../../../shared/schemas/pagination.ts';
+import { NotFoundError } from '../../shared/errors.ts';
+import { pageFrom, scopedFor, sendAll, sendData, sendList, sendScoped } from '../../shared/respond.ts';
 import { importProducts } from './import.ts';
 import * as service from './service.ts';
 
@@ -80,6 +83,30 @@ export function createInventoryRouter(): Router {
   router.delete('/api/categories/:id', ...manage, async (req, res) => {
     await service.deleteCategory(Number(req.params.id));
     sendScoped(res, { categories: await lists.categories() });
+  });
+
+  // ------------------------------------------------ API v1 reads (R2.5b)
+  const canView = (key: VisibleDataKey) => [auth, requireCanView(key)];
+
+  router.get('/api/v1/products', ...canView('products'), async (req, res) => {
+    const page = pageFrom(req);
+    const rows = await service.reads.products(page);
+    sendList(res, scopedFor(res, 'products', rows), pageMeta(page, await service.reads.productCount()));
+  });
+
+  router.get('/api/v1/products/:id', ...canView('products'), async (req, res) => {
+    const product = await service.reads.product(Number(req.params.id));
+    if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND', 'Product not found.');
+    sendData(res, scopedFor(res, 'product', product));
+  });
+
+  router.get('/api/v1/categories', ...canView('categories'), async (_req, res) => {
+    sendAll(res, await lists.categories());
+  });
+
+  router.get('/api/v1/stock-movements', ...canView('movements'), async (req, res) => {
+    const page = pageFrom(req);
+    sendList(res, await service.reads.movements(page), pageMeta(page, await service.reads.movementCount()));
   });
 
   return router;

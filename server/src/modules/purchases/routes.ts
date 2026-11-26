@@ -1,6 +1,8 @@
 import { Router } from 'express';
-import { requireAuth, requirePermission } from '../../middleware/auth.ts';
-import { sendScoped } from '../../shared/respond.ts';
+import { requireAuth, requireCanView, requirePermission } from '../../middleware/auth.ts';
+import { pageMeta } from '../../../../shared/schemas/pagination.ts';
+import { NotFoundError } from '../../shared/errors.ts';
+import { pageFrom, sendData, sendList, sendScoped } from '../../shared/respond.ts';
 import { lists as inventoryLists } from '../inventory/service.ts';
 import * as service from './service.ts';
 
@@ -29,6 +31,20 @@ export function createPurchasesRouter(): Router {
   router.post('/api/purchases/:id/pay', ...manage, async (req, res) => {
     await service.payPurchase(Number(req.params.id), req.body as Body);
     sendScoped(res, { purchases: await service.lists.purchases() });
+  });
+
+  // ------------------------------------------------ API v1 reads (R2.5b)
+  const view = [requireAuth(), requireCanView('purchases')];
+
+  router.get('/api/v1/purchases', ...view, async (req, res) => {
+    const page = pageFrom(req);
+    sendList(res, await service.reads.page(page), pageMeta(page, await service.reads.count()));
+  });
+
+  router.get('/api/v1/purchases/:id', ...view, async (req, res) => {
+    const purchase = await service.reads.one(Number(req.params.id));
+    if (!purchase) throw new NotFoundError('PURCHASE_NOT_FOUND', 'Purchase invoice not found.');
+    sendData(res, purchase);
   });
 
   return router;

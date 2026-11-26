@@ -37,15 +37,21 @@ function typed<T extends Row>(row: T): Omit<T, keyof Row> & Pick<Voucher, keyof 
 
 export const vouchers = {
   /** The latest 300 by date (the limit goes with server-side reports in R6). */
-  async list(q: Executor, limit = 300): Promise<Voucher[]> {
+  async list(q: Executor, limit = 300, offset = 0): Promise<Voucher[]> {
     const rows = await q
       .selectFrom('vouchers')
       .select(COLUMNS)
       .orderBy('voucher_date', 'desc')
       .orderBy('id', 'desc')
       .limit(limit)
+      .offset(offset)
       .execute();
     return rows.map(typed);
+  },
+
+  async count(q: Executor): Promise<number> {
+    const row = await q.selectFrom('vouchers').select((eb) => eb.fn.countAll<number>().as('n')).executeTakeFirst();
+    return Number(row?.n ?? 0);
   },
 
   async findById(q: Executor, id: number): Promise<Voucher | undefined> {

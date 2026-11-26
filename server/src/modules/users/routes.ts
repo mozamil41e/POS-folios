@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { AuthUser } from '../../../../shared/types.ts';
 import { requireAuth, requirePermission } from '../../middleware/auth.ts';
 import { resolveAuthUserById } from '../auth/service.ts';
+import { sendAll } from '../../shared/respond.ts';
 import * as service from './service.ts';
 
 /**
@@ -62,6 +63,15 @@ export function createUsersRouter(): Router {
   router.delete('/api/roles/:id', ...manage, async (req, res) => {
     await service.deleteRole(Number(req.params.id));
     res.json({ roles: await lists.roles() });
+  });
+
+  // ------------------------------------------------ API v1 reads (R2.5b)
+  router.get('/api/v1/users', ...manage, async (_req, res) => {
+    sendAll(res, await lists.users());
+  });
+
+  router.get('/api/v1/roles', ...manage, async (_req, res) => {
+    sendAll(res, await lists.roles());
   });
 
   return router;

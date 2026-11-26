@@ -2,6 +2,7 @@ import { riyadhToday } from '../../../../shared/dates.ts';
 import type { Raw } from '../../../../shared/schemas/common.ts';
 import { parseVoidReason, parseVoucher, VOID_REASON_ERROR } from '../../../../shared/schemas/vouchers.ts';
 import type { AuthUser } from '../../../../shared/types.ts';
+import type { PageRequest } from '../../../../shared/schemas/pagination.ts';
 import { kysely } from '../../db/kysely.ts';
 import { nextDocumentNumber } from '../../db/sequences.ts';
 import { withTransaction } from '../../db/transaction.ts';
@@ -42,3 +43,10 @@ export async function voidVoucher(id: number, raw: Raw, actor: AuthUser): Promis
     await repo.vouchers.void(trx, id, reason.value, new Date().toISOString(), actor.id);
   });
 }
+
+/** API v1 reads (R2.5b): one page of a list, its total, one item. */
+export const reads = {
+  page: (page: PageRequest) => repo.vouchers.list(kysely, page.pageSize, page.offset),
+  count: () => repo.vouchers.count(kysely),
+  one: (id: number) => repo.vouchers.findById(kysely, id),
+};

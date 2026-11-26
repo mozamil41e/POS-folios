@@ -10,8 +10,15 @@ const COLUMNS = ['id', 'name_ar', 'name_en', 'vat_number', 'cr_number', 'phone',
 
 export const suppliers = {
   /** Newest first, as before. */
-  async list(q: Executor): Promise<Supplier[]> {
-    return q.selectFrom('suppliers').select(COLUMNS).orderBy('id', 'desc').execute();
+  async list(q: Executor, limit?: number, offset = 0): Promise<Supplier[]> {
+    let query = q.selectFrom('suppliers').select(COLUMNS).orderBy('id', 'desc');
+    if (limit !== undefined) query = query.limit(limit).offset(offset);
+    return query.execute();
+  },
+
+  async count(q: Executor): Promise<number> {
+    const row = await q.selectFrom('suppliers').select((eb) => eb.fn.countAll<number>().as('n')).executeTakeFirst();
+    return Number(row?.n ?? 0);
   },
 
   async findById(q: Executor, id: number): Promise<Supplier | undefined> {
