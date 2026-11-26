@@ -145,8 +145,8 @@ export const heldCarts = {
     return rows.map((r) => ({ ...r, invoice_subtype: INVOICE_SUBTYPES.find((s) => s === r.invoice_subtype) ?? '0200000' }));
   },
 
-  async insert(q: Executor, cart: HeldCartInput, at: string): Promise<void> {
-    await q
+  async insert(q: Executor, cart: HeldCartInput, at: string): Promise<number> {
+    const result = await q
       .insertInto('held_carts')
       .values({
         label: cart.label,
@@ -156,7 +156,8 @@ export const heldCarts = {
         invoice_subtype: cart.invoice_subtype,
         created_at: at,
       })
-      .execute();
+      .executeTakeFirstOrThrow();
+    return Number(result.insertId);
   },
 
   /** Taken back into the till or dropped; an unknown id changes nothing (as before). */

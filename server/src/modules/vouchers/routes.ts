@@ -3,7 +3,7 @@ import type { AuthUser } from '../../../../shared/types.ts';
 import { requireAuth, requireCanView, requirePermission } from '../../middleware/auth.ts';
 import { pageMeta } from '../../../../shared/schemas/pagination.ts';
 import { NotFoundError } from '../../shared/errors.ts';
-import { pageFrom, sendData, sendList, sendScoped } from '../../shared/respond.ts';
+import { pageFrom, sendData, sendError, sendList, sendScoped } from '../../shared/respond.ts';
 import * as service from './service.ts';
 
 /**
@@ -49,6 +49,23 @@ export function createVouchersRouter(): Router {
     const voucher = await service.reads.one(Number(req.params.id));
     if (!voucher) throw new NotFoundError('VOUCHER_NOT_FOUND', 'Voucher not found.');
     sendData(res, voucher);
+  });
+
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  router.post('/api/v1/vouchers', ...manage, async (req, res) => {
+    const id = await service.createVoucher(req.body as Body);
+    sendData(res, await service.reads.one(id), 201);
+  });
+
+  // Never deleted (R1.8): voided with a reason.
+  router.delete('/api/v1/vouchers/:id', ...manage, (req, res) => {
+    sendError(req, res, 405, 'VOUCHER_DELETE_NOT_ALLOWED', 'Vouchers cannot be deleted. Void the voucher with a reason instead.');
+  });
+
+  router.post('/api/v1/vouchers/:id/void', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.voidVoucher(id, req.body as Body, res.locals.authUser as AuthUser);
+    sendData(res, await service.reads.one(id));
   });
 
   return router;

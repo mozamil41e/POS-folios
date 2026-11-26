@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import * as settingsService from '../../server/src/modules/settings/service.ts';
 import { bearer, createTestApp, createUserWithRole, registerFirstAdmin, type TestApp } from '../helpers/app.ts';
 
 // R2.4b: the sales module. Same totals, numbers, codes and responses as
@@ -110,6 +109,9 @@ describe('what stays the same', () => {
   });
 
   it('confirms a saved sale even when loading the response lists fails (R1.5)', async () => {
+    // Imported here, after createTestApp() set this file's database: a top-level
+    // import would open the database before that (the shared fallback path).
+    const settingsService = await import('../../server/src/modules/settings/service.ts');
     vi.spyOn(settingsService, 'getSettings').mockRejectedValueOnce(new Error('lists unavailable'));
     const before = invoiceCount();
     const res = await sell({});

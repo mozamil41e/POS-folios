@@ -59,6 +59,15 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   }
   const { createApp } = await import('../../server/src/app.ts');
   const { db } = await import('../../src/server/db.ts');
+  // A top-level import of a server module in a test file opens the database
+  // before this function sets its path, on the shared fallback file: files
+  // would then silently share one database. Fail loudly instead (R2.5c).
+  if (path.resolve(db.name) !== path.resolve(dbPath)) {
+    throw new Error(
+      `The database was opened at ${db.name} before createTestApp() set ${dbPath}. ` +
+        'Import server modules inside the test (await import(...)) after createTestApp().'
+    );
+  }
   const { app } = createApp();
   if (options.demoData !== false) {
     // Skipped automatically when the database already holds business data.

@@ -234,7 +234,7 @@ These facts come from Hostinger's support pages. Design around them:
   - never HTML stack traces
 - Writes return the affected resource, not whole lists. Don't add new "bootstrap everything" endpoints.
 - Checkout takes an `Idempotency-Key` (R2.5a, `server/src/shared/idempotency.ts`): the till sends one per sale attempt and reuses it when the same sale is retried; the same key again returns the original invoice (`Idempotent-Replayed: true`), a different sale with the same key is 409. Optional on `/api/invoices`, required on the v1 checkout (R2.5c).
-- API v1 (R2.5) is built next to the current routes, which keep their shape until the UI moves (R4). Under `/api/v1` use `sendData`/`sendList`/`sendError` (`server/src/shared/respond.ts`) and `parsePage` (`shared/schemas/pagination.ts`); the error handler answers v1 paths with the envelope by itself. v1 reads (R2.5b) live in each module's `routes.ts` next to the current routes, guarded by `requireCanView(key)` (the bootstrap read rules) and answered with `sendList`/`sendAll`/`sendData`; cost prices go through `scopedFor(res, "products" | "product", …)`.
+- API v1 (R2.5) is built next to the current routes, which keep their shape until the UI moves (R4). Under `/api/v1` use `sendData`/`sendList`/`sendError` (`server/src/shared/respond.ts`) and `parsePage` (`shared/schemas/pagination.ts`); the error handler answers v1 paths with the envelope by itself. v1 reads (R2.5b) live in each module's `routes.ts` next to the current routes, guarded by `requireCanView(key)` (the bootstrap read rules) and answered with `sendList`/`sendAll`/`sendData`; cost prices go through `scopedFor(res, "products" | "product", …)`. v1 writes (R2.5c) call the same service as the current route and answer with the affected resource only (`201`/`200` `{ data }`, `204` for deletes); `PATCH` keeps fields not sent; the v1 checkout requires an `Idempotency-Key`. `tests/api/api-v1-contract.test.ts` walks every v1 write route the app declares: add a new one there.
 - The server computes all totals from DB prices and recipes. Never trust client totals, document types, costs or numbers.
 - Return DTOs built from allowlists. **Never `SELECT *` into a response.** Settings go out through a public DTO.
 - Error codes are stable and translated by the client. The server never sends localized UI strings.
@@ -274,6 +274,7 @@ These facts come from Hostinger's support pages. Design around them:
   - QR TLV round-trip (only if the Phase-1 tax QR is added later)
 - Integration tests run against **real MariaDB** (CI service / docker-compose): constraints, transactions, concurrency (two parallel sales), migrations `up/down/up`.
 - API tests (Supertest on `createApp()`): every route, the **permission matrix (route × role)**, error codes, idempotency.
+- In API tests, import server modules inside the test (`await import(...)`) after `createTestApp()`, never at the top of the file: a top-level import opens the database before the test sets its temporary path, and `createTestApp()` refuses that.
 - E2E (Playwright): login → sale (cash, card, split) → print → hold/resume → credit note → purchase → daily report → void voucher.
 - Coverage target: ≥ 80% on `service.ts` files and `shared/money.ts`.
 - Use fixed fixtures with hand-calculated expected numbers for every report.

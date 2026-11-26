@@ -228,9 +228,10 @@ export async function creditNote(sourceId: number): Promise<Saved> {
 
 // --------------------------------------------------------------- held carts
 
-export async function holdCart(raw: Raw): Promise<void> {
+/** Returns the held cart's id (v1, R2.5c; the current route ignores it). */
+export async function holdCart(raw: Raw): Promise<number> {
   const cart = valueOrThrow(parseHeldCart(raw));
-  await withTransaction((trx) => repo.heldCarts.insert(trx, cart, new Date().toISOString()));
+  return withTransaction((trx) => repo.heldCarts.insert(trx, cart, new Date().toISOString()));
 }
 
 export async function releaseCart(id: number): Promise<void> {

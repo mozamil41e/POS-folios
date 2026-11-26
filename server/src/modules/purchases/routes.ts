@@ -47,5 +47,18 @@ export function createPurchasesRouter(): Router {
     sendData(res, purchase);
   });
 
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  // Each answers with the affected purchase (and its lines) only.
+  router.post('/api/v1/purchases', ...manage, async (req, res) => {
+    const id = await service.createPurchase(req.body as Body);
+    sendData(res, await service.reads.one(id), 201);
+  });
+
+  router.post('/api/v1/purchases/:id/payments', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.payPurchase(id, req.body as Body);
+    sendData(res, await service.reads.one(id));
+  });
+
   return router;
 }
