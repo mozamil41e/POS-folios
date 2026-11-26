@@ -5,7 +5,7 @@ import type { Database } from './schema.ts';
 /**
  * Typed query builder over the application database (R2.3, decision D3).
  *
- * It shares the one better-sqlite3 connection with the legacy routes, so old
+ * It shares the one better-sqlite3 connection with src/server/db.ts, so old
  * and new code see the same data while domains move over (strangler). Every
  * query runs synchronously underneath and resolves within the same event-loop
  * turn, which is what makes withTransaction() safe on a single connection;

@@ -5,7 +5,7 @@ import type { Executor } from './kysely.ts';
  * Yearly document numbers for the modules (R2.4b), e.g. PO-2026-00042: the
  * Kysely version of nextDocumentNumber() in src/server/sequences.ts (R1.8),
  * on the same document_sequences table, so old and new code share one counter
- * per type and year. The legacy version stays for the routes not moved yet.
+ * per type and year. The synchronous version stays for the demo data seed.
  *
  * Call it with the `trx` of the transaction that saves the document: a failed
  * save rolls the number back. Read then write, without a dialect-specific

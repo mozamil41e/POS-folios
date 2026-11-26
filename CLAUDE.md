@@ -53,9 +53,9 @@ Kysely (D3) and TanStack Query (D4) are **proposed** and still awaiting the owne
 |---|---|---|
 | Language | TypeScript ^7 with `"strict": true` set explicitly (R1.11); 0 errors | Keep 0 errors |
 | Frontend | React 19, Vite 8, Tailwind 4, lucide-react, qrcode | + React Router, TanStack Query, shared UI kit, typed i18n |
-| Backend | Express ^5 (R2.1): `server/src/app.ts` (`createApp`), `main.ts` (entry), routes still in `server/src/legacy/routes.ts` | Express 5 modular monolith (`server/src/modules/*`) |
+| Backend | Express ^5 (R2.1): `server/src/app.ts` (`createApp`), `main.ts` (entry), every route in a module under `server/src/modules/*` (R2.4, the legacy router is gone) | + API v1 envelope (R2.5), cookie sessions (R2.6) |
 | Validation | Manual `String(b.x ?? '')` checks | zod schemas in `shared/schemas` |
-| Data access | Legacy routes: better-sqlite3 (sync), inline SQL. New modules (R2.3): Kysely 0.29 (`server/src/db/kysely.ts`) on the same connection, table types in `server/src/db/schema.ts`, writes through `withTransaction()` (`server/src/db/transaction.ts`) | Kysely on **MariaDB via mysql2** (R3) |
+| Data access | Kysely 0.29 (`server/src/db/kysely.ts`) in each module's `repository.ts`, on the better-sqlite3 connection that `src/server/db.ts` opens; table types in `server/src/db/schema.ts`; writes through `withTransaction()` (`server/src/db/transaction.ts`). `db.ts` keeps only schema creation, migrations and what the demo seed needs | Kysely on **MariaDB via mysql2** (R3) |
 | Database | SQLite file in `./data` | **MariaDB** (Hostinger; MySQL-compatible SQL only) |
 | Auth | Bearer token held in React state | httpOnly cookie session + CSRF |
 | Logging | pino JSON on stdout, one line per API request with `X-Request-Id`, credentials redacted (R2.1) | + optional Sentry |
@@ -100,7 +100,9 @@ Do not assume that the target structure exists yet.
 - `server/src/modules/purchases/` (R2.4b): `POST /api/purchases` and `POST /api/purchases/:id/pay` (`purchases.manage`); rules in `shared/schemas/purchases.ts` (whole quantities, VAT 15 or 0, status of a partial payment from the amount). One transaction per purchase: the number from `nextDocumentNumber(trx, ...)` in `server/src/db/sequences.ts` (the modules' version of `src/server/sequences.ts`, same table), the lines, and the stock through `receiveStock()` of the inventory module, which re-reads the balance per line. Never write stock or movements outside the inventory module.
 - `server/src/modules/vouchers/` (R2.4b): `POST /api/vouchers`, `POST /api/vouchers/:id/void`, and `DELETE` answering 405 (vouchers are only voided), all `vouchers.manage`; rules in `shared/schemas/vouchers.ts` (no invalid or future dates; no date means today in Riyadh).
 - `server/src/modules/sales/` (R2.4b): checkout `POST /api/invoices` (`pos.access`), credit note `POST /api/invoices/:id/credit-note` (`sales.return`), held carts `POST/DELETE /api/carts/hold` (`pos.hold`). Rules in `shared/schemas/sales.ts` (a split payment needs a cash part above 0 and below the total); totals with `lineAmounts` + `discountedTotals` (`shared/money.ts`). Stock through `issueStock()` of the inventory module. After a sale is committed, the route still answers 201 if loading the response lists fails (logged). The owner declined payment-proof features (cash tendered, change, mada reference, shift closing): do not add them.
-- `server/src/legacy/routes.ts`: what is left of the old `server.ts`: the public invoice page (`/api/public/invoices/:uuid`) and `/api/bootstrap`. They move next, then the file is deleted.
+- `server/src/modules/public-invoice/` (R2.4b): `GET /api/public/invoices/:uuid` without a session (rate limited, `noindex`), reading an allowlist only (no internal ids, no customer VAT number). The restaurant's details are today's settings; a copy per invoice comes in R3.4.
+- `server/src/modules/workspace/` (R2.4b): `GET /api/bootstrap`, the lists of all modules filtered by the user's read permissions (`scopeForUser`). R2.5 replaces it with one read endpoint per resource.
+- After the modules, `createApp()` keeps an `/api` gate (`requireAuth`): an unknown API path answers 401 without a session and 404 with one. The legacy router (`server/src/legacy/routes.ts`) was deleted at the end of R2.4.
 - `src/server/db.ts`: schema creation, ad-hoc `ALTER` "migrations", queries (sessions, password hashing, and the users and roles queries moved to the auth and users modules in R2.4b; the default roles are still created here until R3). Demo data lives in `src/server/demo-data.ts`; only `npm run seed:dev` and the tests load it (R1.7).
 - ZATCA was removed in R1.4 (`zatca.ts`, the ZATCA screen, routes, permission and DB columns). `removeZatcaSchema()` in `src/server/db.ts` upgrades older databases (automatic backup first).
 - `src/App.tsx` (1,221 lines): global `data` state loaded from `/api/bootstrap`, plus 25 copy-pasted fetch handlers, plus manual section switching (there is no router).
@@ -221,7 +223,7 @@ These facts come from Hostinger's support pages. Design around them:
 
 - Middleware order: `requestId → logger → helmet → json(limit) → requireAuth → csrf → requirePermission(key) → validate(schema) → controller`.
 - **Every route declares a permission**, reads included. The UI hiding something is not access control.
-- Express 5 (R2.1) passes errors from `async` routes to the error handler by itself: no wrapper. Throw an `AppError` subclass (`NotFoundError`, `ConflictError`, `ValidationError`, ...) for known cases; anything else ends as JSON 500 `INTERNAL` with the request id, logged, no internals. In legacy routes, only known business codes may become 400 (`knownErrorCode`).
+- Express 5 (R2.1) passes errors from `async` routes to the error handler by itself: no wrapper. Throw an `AppError` subclass (`NotFoundError`, `ConflictError`, `ValidationError`, ...) for known cases; anything else ends as JSON 500 `INTERNAL` with the request id, logged, no internals.
 - Read configuration from the validated `AppConfig` (`server/src/config/env.ts`), never from `process.env` in routes. Add a new variable to the schema and to `.env.example`.
 - Log through the pino logger (`createApp` gives one); never log request bodies, passwords, tokens or the setup token.
 - Once a sale or credit note is committed, never answer with an error. Log any follow-up failure and still return 201 (prevents double sales).
@@ -335,7 +337,7 @@ These facts come from Hostinger's support pages. Design around them:
 Project lifecycle, in order, each with acceptance criteria and a phase report:
 **Understand → Audit → Stabilize → Refactor → Test → Deploy & Operate**. SaaS Transformation is a later, separate project. Don't skip a phase: no refactoring before stabilization, and no SaaS before the base architecture is sound.
 
-Current position: **R0 (Understand & Audit) is done. R1 (Stabilize) is waiting for approval.** See [REFACTORING_ROADMAP](docs/REFACTORING_ROADMAP.md).
+Current position: **R0 and R1 are done; in R2, R2.1–R2.4 are done (every route is in a module); next are R2.5 (API v1) and R2.6 (cookie sessions)**, then R3 (MariaDB). See [REFACTORING_ROADMAP](docs/REFACTORING_ROADMAP.md).
 
 ---
 

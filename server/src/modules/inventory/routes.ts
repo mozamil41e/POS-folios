@@ -8,7 +8,7 @@ import * as service from './service.ts';
  * Inventory module routes (R2.4a): products, stock movements, categories and
  * the CSV import. Same paths and response shapes as the legacy routes they
  * replace (the UI did not change), plus POST /api/products/import.
- * Mounted before the legacy router; each route authenticates itself.
+ * Each route authenticates itself.
  */
 export function createInventoryRouter(): Router {
   const router = Router();

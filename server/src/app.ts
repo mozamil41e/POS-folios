@@ -3,8 +3,10 @@ import { initDatabase } from '../../src/server/db.ts';
 import { createRateLimiters, resolveTrustProxy, securityHeaders } from '../../src/server/security.ts';
 import { loadConfig, type AppConfig } from './config/env.ts';
 import { requestsWaitWhileTransactionOpen } from './db/transaction.ts';
-import { createLegacyRouter } from './legacy/routes.ts';
+import { requireAuth } from './middleware/auth.ts';
 import { createAuthRouter } from './modules/auth/routes.ts';
+import { createPublicInvoiceRouter } from './modules/public-invoice/routes.ts';
+import { createWorkspaceRouter } from './modules/workspace/routes.ts';
 import { createCustomersRouter } from './modules/customers/routes.ts';
 import { createPurchasesRouter } from './modules/purchases/routes.ts';
 import { createSalesRouter } from './modules/sales/routes.ts';
@@ -88,10 +90,12 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   // transaction is open (see server/src/db/transaction.ts).
   app.use(requestsWaitWhileTransactionOpen());
 
-  // Modules first (R2.4, strangler): each authenticates its own routes.
-  // One set of rate limiters per app, shared by the modules and the legacy routes.
+  // The modules (R2.4): each route authenticates itself and declares its
+  // permission. One set of rate limiters per app.
   const limiters = createRateLimiters();
   app.use(createAuthRouter({ config, limiters }));
+  app.use(createPublicInvoiceRouter({ limiters }));
+  app.use(createWorkspaceRouter());
   app.use(createUsersRouter());
   app.use(createSettingsRouter());
   app.use(createCustomersRouter());
@@ -100,8 +104,9 @@ export function createApp(options: CreateAppOptions = {}): MizanApp {
   app.use(createVouchersRouter());
   app.use(createSalesRouter({ logger }));
   app.use(createInventoryRouter());
-  // The routes not moved yet, as they were; R2.4b empties this router.
-  app.use(createLegacyRouter({ limiters }));
+  // Any other /api path: 401 without a session, so strangers cannot probe which
+  // routes exist; with a session main.ts answers 404 (as before R2.4).
+  app.use('/api', requireAuth());
 
   const errorHandler = createErrorHandler(logger);
   app.use(errorHandler);

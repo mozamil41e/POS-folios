@@ -9,7 +9,7 @@ import * as service from './service.ts';
 
 /**
  * Sales module routes (R2.4b): checkout, credit note and held carts. Same
- * paths and response shapes as the legacy routes; mounted before them.
+ * paths and response shapes as the legacy routes they replaced.
  */
 type Body = Record<string, unknown>;
 

@@ -7,7 +7,7 @@ import * as service from './service.ts';
 /**
  * Users and roles module routes (R2.4b). Same paths and response shapes as the
  * legacy routes they replace (the UI did not change). Every route needs
- * users.manage; mounted before the legacy router.
+ * users.manage.
  */
 type Body = Record<string, unknown>;
 

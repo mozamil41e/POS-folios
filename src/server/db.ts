@@ -1,14 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import type {
-  Category,
-  InvoiceItem,
-  OrganizationSettings,
-  PermissionKey,
-  Product,
-  StockMovement,
-} from '../../shared/types.ts';
+import type { Category, PermissionKey, Product } from '../../shared/types.ts';
 import { ALL_PERMISSION_KEYS } from '../../shared/permissions.ts';
 import { syncDocumentSequences } from './sequences.ts';
 
@@ -426,12 +419,6 @@ export function initDatabase(): void {
   }
 }
 
-export function getOrganizationSettings(): OrganizationSettings {
-  return db
-    .prepare('SELECT * FROM organization_settings WHERE id = 1')
-    .get() as OrganizationSettings;
-}
-
 /** Normalised name used for uniqueness: trimmed, single spaces, lower case. */
 export function categoryKey(name: string): string {
   return name.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -495,129 +482,6 @@ export function getAllProducts(): Product[] {
   return db
     .prepare('SELECT * FROM products WHERE active = 1 ORDER BY id ASC')
     .all() as Product[];
-}
-
-export function getRecentMovements(limit = 50): StockMovement[] {
-  return db
-    .prepare(`
-      SELECT sm.*, p.name_ar as product_name_ar, p.name_en as product_name_en, p.sku as sku
-      FROM stock_movements sm
-      JOIN products p ON p.id = sm.product_id
-      ORDER BY sm.id DESC
-      LIMIT ?
-    `)
-    .all(limit) as StockMovement[];
-}
-
-export type PublicInvoiceItem = Pick<
-  InvoiceItem,
-  | 'sku'
-  | 'name_ar'
-  | 'name_en'
-  | 'unit_ar'
-  | 'qty'
-  | 'unit_price'
-  | 'discount'
-  | 'tax_rate'
-  | 'tax_category'
-  | 'line_subtotal'
-  | 'line_vat'
-  | 'line_total'
->;
-
-/**
- * Anyone holding the link (receipt QR) can open this, so it returns an
- * allowlist only: no internal ids and no customer VAT number (R1.9, SEC-14).
- */
-export function getPublicInvoiceByUuid(uuid: string): {
-  invoice: {
-    uuid: string;
-    invoice_number: string;
-    invoice_type_code: string;
-    invoice_subtype: string;
-    payment_method: string;
-    cash_amount: number;
-    card_amount: number;
-    customer_name: string;
-    subtotal: number;
-    discount_total: number;
-    vat_total: number;
-    grand_total: number;
-    related_invoice_number: string | null;
-    created_at: string;
-    items: PublicInvoiceItem[];
-  };
-  store: {
-    name_ar: string;
-    name_en: string;
-    vat_number: string;
-    cr_number: string;
-    street_ar: string;
-    building_no: string;
-    city_ar: string;
-    postal_code: string;
-    public_base_url: string;
-  };
-} | null {
-  const inv = db
-    .prepare(`
-      SELECT id, uuid, invoice_number, invoice_type_code, invoice_subtype,
-             payment_method, cash_amount, card_amount, customer_name,
-             subtotal, discount_total, vat_total, grand_total, related_invoice_number, created_at
-      FROM invoices
-      WHERE uuid = ?
-    `)
-    .get(uuid) as
-    | {
-        id: number;
-        uuid: string;
-        invoice_number: string;
-        invoice_type_code: string;
-        invoice_subtype: string;
-        payment_method: string;
-        cash_amount: number;
-        card_amount: number;
-        customer_name: string;
-        subtotal: number;
-        discount_total: number;
-        vat_total: number;
-        grand_total: number;
-        related_invoice_number: string | null;
-        created_at: string;
-      }
-    | undefined;
-
-  if (!inv) return null;
-
-  const items = db
-    .prepare(`
-      SELECT sku, name_ar, name_en, unit_ar, qty, unit_price, discount, tax_rate, tax_category,
-             line_subtotal, line_vat, line_total
-      FROM invoice_items
-      WHERE invoice_id = ?
-      ORDER BY id
-    `)
-    .all(inv.id) as PublicInvoiceItem[];
-  const org = getOrganizationSettings();
-
-  const { id: _internalId, ...publicInvoice } = inv;
-  return {
-    invoice: {
-      ...publicInvoice,
-      items,
-    },
-    store: {
-      name_ar: org.name_ar,
-      name_en: org.name_en,
-      vat_number: org.vat_number,
-      cr_number: org.cr_number,
-      street_ar: org.street_ar,
-      building_no: org.building_no,
-      city_ar: org.city_ar,
-      postal_code: org.postal_code,
-      public_base_url: org.public_base_url,
-    },
-  };
 }
 
 function seedAndMigrateRolesAndUsers(): void {
