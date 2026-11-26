@@ -81,8 +81,20 @@ export interface NewMovement {
 }
 
 export const movements = {
-  async insert(q: Executor, movement: NewMovement): Promise<void> {
-    await q.insertInto('stock_movements').values(movement).execute();
+  async insert(q: Executor, movement: NewMovement): Promise<number> {
+    const result = await q.insertInto('stock_movements').values(movement).executeTakeFirstOrThrow();
+    return Number(result.insertId);
+  },
+
+  /** One movement with its product's names (as in recent()). */
+  async findById(q: Executor, id: number): Promise<StockMovement | undefined> {
+    return (await q
+      .selectFrom('stock_movements as sm')
+      .innerJoin('products as p', 'p.id', 'sm.product_id')
+      .selectAll('sm')
+      .select(['p.name_ar as product_name_ar', 'p.name_en as product_name_en', 'p.sku as sku'])
+      .where('sm.id', '=', id)
+      .executeTakeFirst()) as StockMovement | undefined;
   },
 
   async recent(q: Executor, limit = 80, offset = 0): Promise<StockMovement[]> {

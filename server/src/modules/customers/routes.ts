@@ -40,5 +40,18 @@ export function createCustomersRouter(): Router {
     sendData(res, customer);
   });
 
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  // Each answers with the affected customer only; PATCH keeps fields not sent.
+  router.post('/api/v1/customers', ...manage, async (req, res) => {
+    const id = await service.createCustomer(req.body as Body);
+    sendData(res, await service.reads.one(id), 201);
+  });
+
+  router.patch('/api/v1/customers/:id', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.updateCustomer(id, req.body as Body);
+    sendData(res, await service.reads.one(id));
+  });
+
   return router;
 }

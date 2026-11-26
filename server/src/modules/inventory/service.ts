@@ -126,12 +126,15 @@ export async function deleteProduct(id: number): Promise<void> {
 
 // --------------------------------------------------------- stock movements
 
-/** DB-11, owner's option (a): stock never goes below zero, so the ledger equals the balance. */
-export async function recordMovement(raw: Raw): Promise<void> {
+/**
+ * DB-11, owner's option (a): stock never goes below zero, so the ledger
+ * equals the balance. Returns the new movement's id (v1, R2.5c).
+ */
+export async function recordMovement(raw: Raw): Promise<number> {
   const movement = valueOrThrow(parseMovement(raw));
   if (!Number.isInteger(movement.product_id)) throw productNotFound();
 
-  await withTransaction(async (trx) => {
+  return withTransaction(async (trx) => {
     const product = await repo.products.findActiveById(trx, movement.product_id);
     if (!product) throw productNotFound();
     const delta = movement.type === 'purchase' || movement.type === 'return' ? Math.abs(movement.qty) : movement.qty;
@@ -143,7 +146,7 @@ export async function recordMovement(raw: Raw): Promise<void> {
       });
     }
     await repo.products.setStock(trx, product.id, balance);
-    await repo.movements.insert(trx, {
+    return repo.movements.insert(trx, {
       product_id: product.id,
       type: movement.type,
       qty_delta: delta,
@@ -292,4 +295,6 @@ export const reads = {
   product: (id: number) => repo.products.findActiveById(kysely, id),
   movements: (page: PageRequest) => repo.movements.recent(kysely, page.pageSize, page.offset),
   movementCount: () => repo.movements.count(kysely),
+  movement: (id: number) => repo.movements.findById(kysely, id),
+  category: (id: number) => repo.categories.findById(kysely, id),
 };

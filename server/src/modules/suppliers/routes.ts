@@ -40,5 +40,18 @@ export function createSuppliersRouter(): Router {
     sendData(res, supplier);
   });
 
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  // Each answers with the affected supplier only; PATCH keeps fields not sent.
+  router.post('/api/v1/suppliers', ...manage, async (req, res) => {
+    const id = await service.createSupplier(req.body as Body);
+    sendData(res, await service.reads.one(id), 201);
+  });
+
+  router.patch('/api/v1/suppliers/:id', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.updateSupplier(id, req.body as Body);
+    sendData(res, await service.reads.one(id));
+  });
+
   return router;
 }

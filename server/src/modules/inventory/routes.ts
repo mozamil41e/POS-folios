@@ -3,7 +3,7 @@ import { requireAuth, requireCanView, requirePermission } from '../../middleware
 import type { VisibleDataKey } from '../../../../shared/permissions.ts';
 import { pageMeta } from '../../../../shared/schemas/pagination.ts';
 import { NotFoundError } from '../../shared/errors.ts';
-import { pageFrom, scopedFor, sendAll, sendData, sendList, sendScoped } from '../../shared/respond.ts';
+import { pageFrom, scopedFor, sendAll, sendData, sendError, sendList, sendScoped } from '../../shared/respond.ts';
 import { importProducts } from './import.ts';
 import * as service from './service.ts';
 
@@ -107,6 +107,61 @@ export function createInventoryRouter(): Router {
   router.get('/api/v1/stock-movements', ...canView('movements'), async (req, res) => {
     const page = pageFrom(req);
     sendList(res, await service.reads.movements(page), pageMeta(page, await service.reads.movementCount()));
+  });
+
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  // Each answers with the affected product, movement or category only (cost
+  // prices follow the reader's permissions); PATCH keeps fields not sent.
+  router.post('/api/v1/products', ...manage, async (req, res) => {
+    const id = await service.createProduct(req.body as Record<string, unknown>);
+    sendData(res, scopedFor(res, 'product', await lists.product(id)), 201);
+  });
+
+  router.patch('/api/v1/products/:id', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.updateProduct(id, req.body as Record<string, unknown>);
+    sendData(res, scopedFor(res, 'product', await lists.product(id)));
+  });
+
+  // Soft delete (the row stays for invoices and history); unknown ids change nothing.
+  router.delete('/api/v1/products/:id', ...manage, async (req, res) => {
+    await service.deleteProduct(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  router.post('/api/v1/products/import', ...manage, async (req, res) => {
+    const report = await importProducts(req.body as Record<string, unknown>);
+    if (!report.dryRun && report.imported === 0) {
+      sendError(req, res, 400, 'IMPORT_INVALID', 'The file has problems; nothing was imported.', { ...report });
+      return;
+    }
+    sendData(res, report, report.dryRun ? 200 : 201);
+  });
+
+  router.post('/api/v1/stock-movements', auth, requirePermission('inventory.adjust'), async (req, res) => {
+    const id = await service.recordMovement(req.body as Record<string, unknown>);
+    sendData(res, await service.reads.movement(id), 201);
+  });
+
+  router.post('/api/v1/categories', ...manage, async (req, res) => {
+    sendData(res, await service.createCategory(req.body as Record<string, unknown>), 201);
+  });
+
+  router.patch('/api/v1/categories/:id', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.updateCategory(id, req.body as Record<string, unknown>);
+    sendData(res, await service.reads.category(id));
+  });
+
+  // The new order of all categories: answers with the whole (small) list.
+  router.put('/api/v1/categories/order', ...manage, async (req, res) => {
+    await service.reorderCategories(req.body as Record<string, unknown>);
+    sendAll(res, await lists.categories());
+  });
+
+  router.delete('/api/v1/categories/:id', ...manage, async (req, res) => {
+    await service.deleteCategory(Number(req.params.id));
+    res.status(204).end();
   });
 
   return router;
