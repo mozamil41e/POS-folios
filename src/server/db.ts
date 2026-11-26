@@ -3,8 +3,6 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import type {
   Category,
-  HeldCart,
-  Invoice,
   InvoiceItem,
   OrganizationSettings,
   PermissionKey,
@@ -509,23 +507,6 @@ export function getRecentMovements(limit = 50): StockMovement[] {
       LIMIT ?
     `)
     .all(limit) as StockMovement[];
-}
-
-export function getAllInvoices(): Invoice[] {
-  const invoices = db
-    .prepare('SELECT * FROM invoices ORDER BY id DESC LIMIT 100')
-    .all() as Invoice[];
-  const itemsStmt = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?');
-  return invoices.map((inv) => ({
-    ...inv,
-    items: itemsStmt.all(inv.id) as InvoiceItem[],
-  }));
-}
-
-export function getHeldCarts(): HeldCart[] {
-  return db
-    .prepare('SELECT * FROM held_carts ORDER BY id DESC')
-    .all() as HeldCart[];
 }
 
 export type PublicInvoiceItem = Pick<

@@ -62,3 +62,28 @@ export function splitVatInclusive(grossAmount: number, ratePercent: number): { n
   const vat = roundMoney((gross * ratePercent) / (100 + ratePercent));
   return { net: roundMoney(gross - vat), vat };
 }
+
+export interface DiscountedTotals {
+  subtotal: number;
+  vat: number;
+  total: number;
+  /** The discount applied: what was asked, at most the subtotal. */
+  discount: number;
+}
+
+/**
+ * Totals of a sale with one discount on the whole invoice (R1, moved here in
+ * R2.4b with exactly the same arithmetic): the discount, at most the
+ * subtotal, comes off the subtotal, and the VAT shrinks in the same
+ * proportion. The lines keep their own amounts; the receipt shows the
+ * discount as its own line.
+ */
+export function discountedTotals(lines: ReadonlyArray<{ subtotal: number; vat: number }>, discount: number): DiscountedTotals {
+  let rawSubtotal = 0;
+  for (const line of lines) rawSubtotal += line.subtotal;
+  const applied = Math.min(discount, rawSubtotal);
+  const ratio = rawSubtotal > 0 ? (rawSubtotal - applied) / rawSubtotal : 1;
+  const subtotal = roundMoney(rawSubtotal - applied);
+  const vat = roundMoney(lines.reduce((sum, line) => sum + line.vat, 0) * ratio);
+  return { subtotal, vat, total: roundMoney(subtotal + vat), discount: applied };
+}

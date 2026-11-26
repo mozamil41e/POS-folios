@@ -89,6 +89,19 @@ describe('describeApiError (R1.10)', () => {
     expect(describeApiError({ code: 'VOID_REASON_REQUIRED' }, 'en')).toBe('Enter a reason for voiding (3 to 300 characters)');
   });
 
+  it('explains sale errors (R2.4b)', () => {
+    expect(describeApiError({ code: 'INVALID_SPLIT' }, 'ar')).toMatch(/^الدفع المقسّم يحتاج جزءاً نقدياً/);
+    expect(describeApiError({ code: 'INVALID_QTY', line: 2, field: 'qty', reason: 'NOT_INTEGER' }, 'ar')).toBe(
+      'البند 2 - الكمية: يجب أن يكون عدداً صحيحاً'
+    );
+    expect(describeApiError({ code: 'INSUFFICIENT_STOCK', available: 3, line: 1 }, 'ar')).toBe(
+      'الكمية أكبر من المتوفر في المخزون (المتاح 3)'
+    );
+    expect(describeApiError({ code: 'ALREADY_RETURNED', credit_note_number: 'CN-2026-00001' }, 'ar')).toBe(
+      'هذه الفاتورة مرتجعة مسبقاً بالإشعار CN-2026-00001'
+    );
+  });
+
   it('returns null for unknown codes so the server message is used', () => {
     expect(describeApiError({ code: 'SOMETHING_NEW', error: 'x' }, 'ar')).toBeNull();
     expect(describeApiError({ code: 'VALIDATION_FAILED', field: 'unknown_field', reason: 'REQUIRED' }, 'ar')).toBeNull();

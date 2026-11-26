@@ -14,8 +14,10 @@ export interface ApiErrorBody {
   available?: number;
   /** Products still in a category that cannot be deleted. */
   count?: number;
-  /** The 1-based line of a purchase with a problem (R2.4b). */
+  /** The 1-based line of a purchase or sale with a problem (R2.4b). */
   line?: number;
+  /** The credit note that already reverses an invoice (R2.4b). */
+  credit_note_number?: string;
 }
 
 type Bilingual = { ar: string; en: string };
@@ -70,6 +72,12 @@ const FIELD_LABELS: Record<string, Bilingual> = {
   payment_channel: { ar: 'طريقة الدفع', en: 'Payment channel' },
   category: { ar: 'التصنيف', en: 'Category' },
   reason: { ar: 'السبب', en: 'Reason' },
+  discount_total: { ar: 'الخصم', en: 'Discount' },
+  discount: { ar: 'الخصم', en: 'Discount' },
+  cash_amount: { ar: 'المبلغ النقدي', en: 'Cash amount' },
+  payment_method: { ar: 'طريقة الدفع', en: 'Payment method' },
+  invoice_subtype: { ar: 'نوع الفاتورة', en: 'Invoice type' },
+  label: { ar: 'اسم الطلب المعلق', en: 'Held order name' },
 };
 
 const REASONS: Record<string, Bilingual> = {
@@ -130,6 +138,36 @@ export function describeApiError(body: ApiErrorBody | null | undefined, lang: La
         ? 'الملف فيه أخطاء، لم يُستورد أي صنف. راجع المعاينة وصحّح الملف'
         : 'The file has problems; nothing was imported. Check the preview and fix the file';
     // Customers and suppliers (R2.4b); CUSTOMER_NOT_FOUND also comes from the checkout.
+    // Sales (R2.4b; the codes are those of R1.5–R1.11)
+    case 'INVALID_SPLIT':
+      return isAr
+        ? 'الدفع المقسّم يحتاج جزءاً نقدياً أكبر من صفر وأقل من الإجمالي. إن كان المبلغ كله نقداً أو كله شبكة فاختر نقدي أو شبكة'
+        : 'A split payment needs a cash part above 0 and below the total. If it is all cash or all card, choose cash or card';
+    case 'INVALID_QTY': {
+      const reason = body.reason ? REASONS[body.reason] : undefined;
+      if (typeof body.line !== 'number' || !reason) return null;
+      return isAr ? `البند ${body.line} - الكمية: ${reason.ar}` : `Line ${body.line}: Quantity ${reason.en}`;
+    }
+    case 'DISCOUNT_NOT_ALLOWED':
+      return isAr ? 'ليست لديك صلاحية الخصم' : 'You are not allowed to give discounts';
+    case 'INVALID_DOCUMENT_TYPE':
+      return isAr ? 'لا تُصدر هنا إلا فواتير البيع' : 'Only sales invoices can be issued here';
+    case 'CUSTOMER_REQUIRED':
+      return isAr ? 'الفاتورة الضريبية تحتاج عميلاً مسجلاً' : 'A tax invoice needs a registered customer';
+    case 'CUSTOMER_VAT_INVALID':
+      return isAr
+        ? 'الفاتورة الضريبية تتطلب رقماً ضريبياً صحيحاً للعميل (15 رقماً يبدأ وينتهي بـ 3)'
+        : 'A tax invoice needs the customer to have a valid 15-digit VAT number';
+    case 'INVOICE_NOT_FOUND':
+      return isAr ? 'الفاتورة الأصلية غير موجودة' : 'Original invoice not found';
+    case 'NOT_A_SALES_INVOICE':
+      return isAr ? 'الإشعار الدائن يصدر لفاتورة بيع فقط' : 'A credit note can only be issued for a sales invoice';
+    case 'ALREADY_RETURNED':
+      return body.credit_note_number
+        ? isAr
+          ? `هذه الفاتورة مرتجعة مسبقاً بالإشعار ${body.credit_note_number}`
+          : `This invoice was already returned by ${body.credit_note_number}`
+        : null;
     // Cash vouchers (R1.8 codes, Arabic texts since R2.4b)
     case 'VOID_REASON_REQUIRED':
       return isAr ? 'اكتب سبب الإلغاء (من 3 إلى 300 حرف)' : 'Enter a reason for voiding (3 to 300 characters)';

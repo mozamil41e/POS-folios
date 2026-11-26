@@ -196,6 +196,41 @@ export async function receiveStock(
   }
 }
 
+/**
+ * Stock sold (R2.4b, sales): takes `qty` off the current balance and writes
+ * one 'sale' movement. Stock never goes below zero (DB-11); the sales module
+ * checks first to name the line, this is the last guard. Pass the sale's
+ * transaction. Returns the new balance.
+ */
+export async function issueStock(
+  trx: repo.Executor,
+  line: { product_id: number; qty: number },
+  referenceNo: string,
+  notes: string,
+  at: string
+): Promise<number> {
+  const product = await repo.products.findById(trx, line.product_id);
+  if (!product) throw productNotFound();
+  const balance = product.stock_qty - line.qty;
+  if (balance < 0) {
+    throw new AppError(400, 'INSUFFICIENT_STOCK', `Not enough stock: only ${product.stock_qty} available.`, {
+      field: 'qty',
+      available: product.stock_qty,
+    });
+  }
+  await repo.products.update(trx, product.id, { stock_qty: balance, updated_at: at });
+  await repo.movements.insert(trx, {
+    product_id: product.id,
+    type: MOVEMENT_TYPES.SALE,
+    qty_delta: -line.qty,
+    balance_after: balance,
+    reference_no: referenceNo,
+    notes,
+    created_at: at,
+  });
+  return balance;
+}
+
 // --------------------------------------------------------------- categories
 
 const categoryExists = () =>
