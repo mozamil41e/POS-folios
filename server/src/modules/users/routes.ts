@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { AuthUser } from '../../../../shared/types.ts';
 import { requireAuth, requirePermission } from '../../middleware/auth.ts';
 import { resolveAuthUserById } from '../auth/service.ts';
-import { sendAll } from '../../shared/respond.ts';
+import { sendAll, sendData } from '../../shared/respond.ts';
 import * as service from './service.ts';
 
 /**
@@ -72,6 +72,44 @@ export function createUsersRouter(): Router {
 
   router.get('/api/v1/roles', ...manage, async (_req, res) => {
     sendAll(res, await lists.roles());
+  });
+
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  // Each answers with the affected account or role only.
+  router.post('/api/v1/users', ...manage, async (req, res) => {
+    const id = await service.createUser(req.body as Body);
+    sendData(res, await lists.user(id), 201);
+  });
+
+  // PATCH: what is not sent keeps its value. The current PUT always takes the
+  // name and phone from the request, so they are filled in from the account.
+  router.patch('/api/v1/users/:id', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    const current = await lists.user(id);
+    const body = { full_name: current?.full_name, phone: current?.phone, ...(req.body as Body) };
+    await service.updateUser(id, body, actorOf(res.locals));
+    sendData(res, await lists.user(id));
+  });
+
+  router.delete('/api/v1/users/:id', ...manage, async (req, res) => {
+    await service.deleteUser(Number(req.params.id), actorOf(res.locals));
+    res.status(204).end();
+  });
+
+  router.post('/api/v1/roles', ...manage, async (req, res) => {
+    const id = await service.createRole(req.body as Body);
+    sendData(res, await lists.role(id), 201);
+  });
+
+  router.patch('/api/v1/roles/:id', ...manage, async (req, res) => {
+    const id = Number(req.params.id);
+    await service.updateRole(id, req.body as Body);
+    sendData(res, await lists.role(id));
+  });
+
+  router.delete('/api/v1/roles/:id', ...manage, async (req, res) => {
+    await service.deleteRole(Number(req.params.id));
+    res.status(204).end();
   });
 
   return router;

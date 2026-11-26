@@ -1,6 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
+import { sendError } from '../../server/src/shared/respond.ts';
 
 /**
  * HTTP hardening for a single Node process behind Hostinger's proxy (R1.9,
@@ -79,7 +80,8 @@ function createLimiter({ windowMs, limit, failuresOnly, message }: LimiterOption
         ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000))
         : Math.ceil(windowMs / 1000);
       res.setHeader('Retry-After', String(retryAfterSeconds));
-      res.status(429).json({ error: message, code: 'RATE_LIMITED', retryAfterSeconds });
+      // The same shape as the route: the v1 envelope under /api/v1 (R2.5c).
+      sendError(req, res, 429, 'RATE_LIMITED', message, { retryAfterSeconds });
     },
   });
 }

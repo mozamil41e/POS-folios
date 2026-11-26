@@ -22,5 +22,12 @@ export function createSettingsRouter(): Router {
     sendData(res, scopedFor(res, 'settings', await service.getSettings()));
   });
 
+  // ----------------------------------------------- API v1 writes (R2.5c)
+  // PATCH: fields not sent keep their value (as the current PUT already does).
+  router.patch('/api/v1/settings', requireAuth(), requirePermission('settings.manage'), async (req, res) => {
+    const settings = await service.updateSettings(req.body as Record<string, unknown>);
+    sendData(res, scopedFor(res, 'settings', settings));
+  });
+
   return router;
 }

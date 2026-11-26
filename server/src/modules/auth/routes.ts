@@ -1,6 +1,7 @@
 import { Router, type RequestHandler } from 'express';
 import type { AppConfig } from '../../config/env.ts';
 import { requireAuth } from '../../middleware/auth.ts';
+import { sendData } from '../../shared/respond.ts';
 import * as service from './service.ts';
 
 /**
@@ -38,6 +39,30 @@ export function createAuthRouter({ config, limiters }: AuthRouterContext): Route
   router.post('/api/auth/logout', requireAuth(), async (_req, res) => {
     await service.logout(String(res.locals.authToken ?? ''));
     res.json({ ok: true });
+  });
+
+  // ------------------------------------------------------- API v1 (R2.5c)
+  // The same services and the same rate limiters (one counter for both paths,
+  // so switching path does not reset it). Sessions stay Bearer until R2.6.
+  router.get('/api/v1/auth/status', async (_req, res) => {
+    sendData(res, await service.status(config.setupToken));
+  });
+
+  router.post('/api/v1/auth/setup', limiters.setup, async (req, res) => {
+    sendData(res, await service.setupFirstAdmin(req.body as Body, config.setupToken), 201);
+  });
+
+  router.post('/api/v1/auth/login', limiters.login, async (req, res) => {
+    sendData(res, await service.login(req.body as Body));
+  });
+
+  router.get('/api/v1/auth/me', requireAuth(), (_req, res) => {
+    sendData(res, res.locals.authUser);
+  });
+
+  router.post('/api/v1/auth/logout', requireAuth(), async (_req, res) => {
+    await service.logout(String(res.locals.authToken ?? ''));
+    res.status(204).end();
   });
 
   return router;

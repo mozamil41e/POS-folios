@@ -46,6 +46,8 @@ export const lists = {
   roles: () => repo.roles.list(kysely),
   role: (id: number) => repo.roles.findById(kysely, id),
   roleBySlug: (slug: string) => repo.roles.findBySlug(kysely, slug),
+  /** One account as the users screen shows it (v1, R2.5c); the list is small. */
+  user: async (id: number) => (await repo.users.list(kysely)).find((u) => u.id === id),
 };
 
 // ---------------------------------------------------------------- users
